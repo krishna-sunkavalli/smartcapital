@@ -1,81 +1,64 @@
-from datetime import date, datetime, timedelta, timezone
+import os
 
-from aiis.config import TriggersCfg
-from aiis.db.models import Analysis, Position, Recommendation
-from aiis.triggers.blackout import in_earnings_blackout, trading_days_between
-from aiis.triggers.buy_triggers import Trigger
-from aiis.triggers.dedup import admit_trigger
-from aiis.triggers.review_triggers import detect_review_triggers
+import numpy as np
+import pandas as pd
 
+os.environ.setdefault("APPROVAL_SIGNING_SECRET", "test-secret")
 
-def test_trading_days_skip_weekends():
-    # Fri 2026-07-17 -> Mon 2026-07-20 is 1 trading day
-    assert trading_days_between(date(2026, 7, 17), date(2026, 7, 20)) == 1
+from smartcapital.config import TriggersCfg
+from smartcapital.triggers import detect, ta_snapshot
 
 
-def test_earnings_blackout_window():
-    today = date(2026, 7, 20)  # Monday
-    assert in_earnings_blackout(today, date(2026, 7, 24), 5)      # 4 trading days out
-    assert not in_earnings_blackout(today, date(2026, 8, 20), 5)  # far out
-    assert not in_earnings_blackout(today, None, 5)
+def make_df(closes):
+    closes = pd.Series(closes, dtype=float)
+    return pd.DataFrame({"close": closes, "open": closes, "high": closes,
+                         "low": closes, "volume": [1e6] * len(closes)})
 
 
-def test_cooldown_suppresses_refires(session):
-    trig = Trigger("ema_20_50_cross", "buy", {})
-    first = admit_trigger(session, "MSFT", trig, cooldown_days=5)
-    assert first is not None
-    assert admit_trigger(session, "MSFT", trig, cooldown_days=5) is None
-    # Different trigger type on same symbol is independent
-    assert admit_trigger(session, "MSFT", Trigger("rsi_oversold", "buy", {}), 5) is not None
-    # After the cooldown elapses it fires again
-    later = datetime.now(timezone.utc) + timedelta(days=6)
-    assert admit_trigger(session, "MSFT", trig, cooldown_days=5, now=later) is not None
+def test_down_day_fires_at_threshold():
+    df = make_df([100.0] * 250)
+    cfg = TriggersCfg(down_day_pct=0.05)
+    assert "down_day" in {t.trigger_type for t in detect(df, 95.0, cfg)}
+    assert "down_day" not in {t.trigger_type for t in detect(df, 96.0, cfg)}
 
 
-def _pos(entry=100.0, qty=10.0):
-    return Position(symbol="MSFT", qty=qty, avg_entry_price=entry, sector="Technology")
-
-
-def test_drawdown_review_trigger():
+def test_below_ema200_fires():
+    df = make_df([100.0] * 250)  # EMA-200 of a constant series is 100
     cfg = TriggersCfg()
-    trigs = detect_review_triggers(_pos(entry=100.0), current_price=85.0,
-                                   managed_capital=10_000.0, cfg=cfg,
-                                   now=datetime(2026, 7, 21, tzinfo=timezone.utc))  # Tuesday
-    assert "drawdown" in {t.trigger_type for t in trigs}
+    assert "below_ema200" in {t.trigger_type for t in detect(df, 99.0, cfg)}
+    assert "below_ema200" not in {t.trigger_type for t in detect(df, 101.0, cfg)}
 
 
-def test_concentration_review_trigger():
-    cfg = TriggersCfg()
-    trigs = detect_review_triggers(_pos(qty=20.0), current_price=100.0,
-                                   managed_capital=10_000.0, cfg=cfg,
-                                   now=datetime(2026, 7, 21, tzinfo=timezone.utc))
-    assert "concentration" in {t.trigger_type for t in trigs}
+def test_no_ema200_trigger_without_enough_history():
+    df = make_df([100.0] * 150)
+    assert "below_ema200" not in {t.trigger_type for t in detect(df, 90.0, TriggersCfg())}
 
 
-def test_weekly_review_fires_on_configured_day():
-    cfg = TriggersCfg(weekly_review_day="friday")
-    friday = datetime(2026, 7, 24, 15, 0, tzinfo=timezone.utc)
-    trigs = detect_review_triggers(_pos(), 100.0, 100_000.0, cfg, now=friday)
-    assert "weekly_review" in {t.trigger_type for t in trigs}
-    tuesday = datetime(2026, 7, 21, 15, 0, tzinfo=timezone.utc)
-    trigs = detect_review_triggers(_pos(), 100.0, 100_000.0, cfg, now=tuesday)
-    assert "weekly_review" not in {t.trigger_type for t in trigs}
+def test_short_history_no_triggers():
+    assert detect(make_df([100.0] * 30), 50.0, TriggersCfg()) == []
 
 
-def test_thesis_break_check():
-    cfg = TriggersCfg()
-    origin = Analysis(
-        trigger_event_id="t", symbol="MSFT", kind="buy", model="m", prompt_version="2.0.0",
-        temperature=0.0, data_packet={}, bear_case="", bull_case="", judge_output={},
-        recommendation=Recommendation.BUY, hypothetical_entry_price=100.0,
-        thesis_conditions=[{"metric": "price", "op": "gt", "value": 95.0}],
-    )
-    trigs = detect_review_triggers(_pos(), current_price=90.0, managed_capital=100_000.0,
-                                   cfg=cfg, now=datetime(2026, 7, 21, tzinfo=timezone.utc),
-                                   origin_analysis=origin, indicator_snapshot={"rsi14": 40.0})
-    assert "thesis_break" in {t.trigger_type for t in trigs}
-    # Condition still holding -> no thesis break
-    trigs = detect_review_triggers(_pos(), current_price=98.0, managed_capital=100_000.0,
-                                   cfg=cfg, now=datetime(2026, 7, 21, tzinfo=timezone.utc),
-                                   origin_analysis=origin, indicator_snapshot={"rsi14": 40.0})
-    assert "thesis_break" not in {t.trigger_type for t in trigs}
+def test_ta_snapshot_fields():
+    df = make_df(list(np.linspace(90, 110, 260)))
+    snap = ta_snapshot(df, 100.0)
+    assert snap["price"] == 100.0
+    assert snap["ema200"] is not None
+    assert snap["pct_off_52w_high"] < 0
+    assert isinstance(snap["avg_volume_20d"], int)
+
+
+def test_cooldown_roundtrip():
+    from datetime import timedelta
+    from smartcapital import db as dbm
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine("sqlite://", future=True)
+    dbm.Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    now = dbm.utcnow()
+    assert not dbm.in_cooldown(s, "MSFT", "down_day", now)
+    dbm.start_cooldown(s, "MSFT", "down_day", now + timedelta(days=5))
+    assert dbm.in_cooldown(s, "MSFT", "down_day", now)
+    assert not dbm.in_cooldown(s, "MSFT", "down_day", now + timedelta(days=6))
+    assert not dbm.in_cooldown(s, "MSFT", "below_ema200", now)

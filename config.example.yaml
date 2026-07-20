@@ -1,0 +1,22 @@
+# SmartCapital v1 configuration. Copy to config.yaml.
+
+watchlist: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, CRM]
+
+triggers:
+  poll_interval_minutes: 15
+  down_day_pct: 0.05            # trigger: stock down >= 5% vs previous close
+  # trigger: price below EMA-200 (fires when it closes below, then cools down)
+  cooldown_days: 5              # a trigger fires once per symbol per N days
+
+order:
+  notional_usd: 500.0           # fixed order size for v1
+  price_band_pct: 0.01          # approval is valid within +/- 1% of the analyzed price
+  min_cash_buffer_usd: 500.0    # never spend below this cash floor
+
+llm:
+  model: claude-sonnet-5
+  max_tokens: 1500
+  temperature: 0.0
+
+approval:
+  ttl_minutes: 60               # unanswered proposals expire; expiry = no action
