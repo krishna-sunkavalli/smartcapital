@@ -16,6 +16,8 @@ from smartcapital.config import secrets
 class Market:
     def __init__(self) -> None:
         s = secrets()
+        if s.alpaca_env not in ("paper", "live"):
+            raise RuntimeError("Set ALPACA_ENV to 'paper' or 'live' explicitly in .env")
         self.data = StockHistoricalDataClient(s.alpaca_api_key, s.alpaca_secret_key)
         self.trading = TradingClient(s.alpaca_api_key, s.alpaca_secret_key,
                                      paper=s.alpaca_env != "live")

@@ -43,13 +43,12 @@ class Secrets(BaseSettings):
 
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
-    alpaca_env: str = "paper"
+    # No default on purpose: set ALPACA_ENV to "paper" or "live" explicitly.
+    alpaca_env: str = ""
     fmp_api_key: str = ""
     anthropic_api_key: str = ""
     telegram_bot_token: str = ""
-    telegram_allowed_chat_id: str = ""
-    approval_signing_secret: str = ""
-    database_url: str = "sqlite:///smartcapital.db"
+    telegram_chat_id: str = ""
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:

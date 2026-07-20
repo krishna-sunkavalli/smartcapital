@@ -1,9 +1,5 @@
-import os
-
 import numpy as np
 import pandas as pd
-
-os.environ.setdefault("APPROVAL_SIGNING_SECRET", "test-secret")
 
 from smartcapital.config import TriggersCfg
 from smartcapital.triggers import detect, ta_snapshot
@@ -49,16 +45,13 @@ def test_ta_snapshot_fields():
 
 def test_cooldown_roundtrip():
     from datetime import timedelta
-    from smartcapital import db as dbm
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
 
-    engine = create_engine("sqlite://", future=True)
-    dbm.Base.metadata.create_all(engine)
-    s = sessionmaker(bind=engine)()
-    now = dbm.utcnow()
-    assert not dbm.in_cooldown(s, "MSFT", "down_day", now)
-    dbm.start_cooldown(s, "MSFT", "down_day", now + timedelta(days=5))
-    assert dbm.in_cooldown(s, "MSFT", "down_day", now)
-    assert not dbm.in_cooldown(s, "MSFT", "down_day", now + timedelta(days=6))
-    assert not dbm.in_cooldown(s, "MSFT", "below_ema200", now)
+    from smartcapital.state import Store, utcnow
+
+    store = Store()
+    now = utcnow()
+    assert not store.in_cooldown("MSFT", "down_day", now)
+    store.start_cooldown("MSFT", "down_day", now + timedelta(days=5))
+    assert store.in_cooldown("MSFT", "down_day", now)
+    assert not store.in_cooldown("MSFT", "down_day", now + timedelta(days=6))
+    assert not store.in_cooldown("MSFT", "below_ema200", now)
