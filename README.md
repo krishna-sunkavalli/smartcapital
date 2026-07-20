@@ -15,6 +15,38 @@ adversarial analysis, recommends **buy / trim / sell** actions — and executes
 | Human (hardened Telegram gate) | Every buy, trim, and sell decision, with fatigue countermeasures to keep that ownership real |
 | Alpaca | Only explicitly approved, price-bounded, idempotent limit orders |
 
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    subgraph FEEDS["Data feeds (source + as-of on every record)"]
+        ALP["Alpaca<br/>market data"]
+        FMP["FMP<br/>fundamentals"]
+        EVT["Earnings calendar<br/>+ SEC filings"]
+    end
+    TRIG["Triggers<br/>+ persisted cooldown<br/>+ earnings blackout"]
+    PKT["Packet validation<br/>missing/stale → reject<br/>feeds disagree → halt"]
+    LLM["Adversarial LLM<br/>bear → bull → judge"]
+    GUARD["Deterministic guardrails<br/>(LLM cannot override)"]
+    TG["Telegram approval<br/>signed · band-bound ·<br/>single-use · fatigue-proofed"]
+    EXEC["Executor<br/>re-check guardrails →<br/>idempotent limit order"]
+    BROKER["Alpaca<br/>paper / live"]
+    AUDIT[("Append-only<br/>audit log")]
+
+    ALP --> TRIG --> PKT --> LLM
+    FMP --> PKT
+    EVT --> PKT
+    LLM -->|Buy / Trim / Sell| GUARD --> TG -->|approved| EXEC --> BROKER
+    LLM -.->|"Watch / Pass / Hold<br/>logged for scoring"| AUDIT
+    GUARD -.->|violation → voided| AUDIT
+    TG -.->|reject / expire → no action| AUDIT
+    EXEC -.->|"price left band →<br/>void, never resubmit"| AUDIT
+```
+
+More diagrams — full component map, end-to-end sequence, proposal lifecycle
+state machine, trigger taxonomy, rollout phases — in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Layout
 
 ```
