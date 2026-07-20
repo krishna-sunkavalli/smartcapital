@@ -54,6 +54,7 @@ class Engine:
             packet = {
                 "technicals": triggers.ta_snapshot(df, price),
                 "fundamentals": fundamentals.snapshot(symbol),
+                "news_headlines": fundamentals.news(symbol),
             }
             verdict = analyst.analyze(symbol, trig.trigger_type, trig.details,
                                       packet, self.cfg.llm)

@@ -10,7 +10,7 @@ Telegram. Nothing is ever bought without your explicit approval.
 ```mermaid
 flowchart LR
     T["Triggers (deterministic)<br/>· down ≥ 5% on the day<br/>· price below EMA-200<br/>+ per-symbol cooldown"]
-    D["Gather details<br/>TA (computed from Alpaca bars)<br/>+ fundamentals (FMP)"]
+    D["Gather details<br/>TA (from Alpaca bars)<br/>+ fundamentals, earnings dates,<br/>news headlines (FMP)"]
     L["LLM<br/>buy or decline<br/>(decline = default)"]
     A["Telegram approval<br/>Approve / Deny buttons<br/>expires after 1h"]
     O["Limit order on Alpaca<br/>only if price still in band"]
@@ -30,7 +30,7 @@ flowchart LR
 |---|---|
 | `triggers.py` | The two v1 triggers + TA snapshot, pure functions, thresholds in `config.yaml` |
 | `market.py` | Alpaca: bars, latest price, clock, cash |
-| `fundamentals.py` | FMP: sector, valuation, recent earnings |
+| `fundamentals.py` | FMP: sector, valuation, recent + upcoming earnings, just-reported flag, news headlines |
 | `analyst.py` | One LLM call → strict-JSON `buy`/`decline` with reasoning + risks |
 | `telegram_bot.py` | Approve/Deny buttons in your chat; unanswered proposals expire |
 | `executor.py` | Pre-submit re-checks, then a limit order; tracks to fill |
