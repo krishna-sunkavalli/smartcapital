@@ -34,6 +34,32 @@ class Market:
             return bars
         return bars.xs(symbol) if isinstance(bars.index, pd.MultiIndex) else bars
 
+    # --- batched variants: ~10 API calls for the whole S&P 500 instead of ~1000
+    def latest_prices(self, symbols: list[str], chunk: int = 200) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for i in range(0, len(symbols), chunk):
+            trades = self.data.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=symbols[i:i + chunk]))
+            out.update({sym: float(t.price) for sym, t in trades.items()})
+        return out
+
+    def daily_bars_multi(self, symbols: list[str], days: int = 260,
+                         chunk: int = 50) -> dict[str, pd.DataFrame]:
+        start = datetime.now(timezone.utc) - timedelta(days=int(days * 1.6))
+        out: dict[str, pd.DataFrame] = {}
+        for i in range(0, len(symbols), chunk):
+            bars = self.data.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=symbols[i:i + chunk],
+                timeframe=TimeFrame.Day, start=start)).df
+            if bars.empty:
+                continue
+            if isinstance(bars.index, pd.MultiIndex):
+                for sym in bars.index.get_level_values(0).unique():
+                    out[sym] = bars.xs(sym)
+            else:  # single-symbol chunk comes back flat
+                out[symbols[i]] = bars
+        return out
+
     def market_open(self) -> bool:
         return bool(self.trading.get_clock().is_open)
 

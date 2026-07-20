@@ -9,7 +9,7 @@ Telegram. Nothing is ever bought without your explicit approval.
 
 ```mermaid
 flowchart LR
-    T["Triggers (deterministic)<br/>· down ≥ 5% on the day<br/>· price below EMA-200<br/>+ per-symbol cooldown"]
+    T["Triggers (deterministic, full S&P 500)<br/>· down ≥ 5% on the day<br/>· crossing down through EMA-200<br/>+ cooldown, severity ranking, daily caps"]
     D["Gather details<br/>TA (from Alpaca bars)<br/>+ fundamentals, earnings dates,<br/>news headlines (FMP)"]
     L["LLM<br/>buy or decline<br/>(decline = default)"]
     A["Telegram approval<br/>Approve / Deny buttons<br/>expires after 1h"]
@@ -28,8 +28,8 @@ flowchart LR
 
 | File | Job |
 |---|---|
-| `triggers.py` | The two v1 triggers + TA snapshot, pure functions, thresholds in `config.yaml` |
-| `market.py` | Alpaca: bars, latest price, clock, cash |
+| `triggers.py` | The two v1 triggers (with severity scores) + TA snapshot, pure functions, thresholds in `config.yaml` |
+| `market.py` | Alpaca: bars + prices (batched for the full index), clock, cash |
 | `fundamentals.py` | FMP: sector, valuation, recent + upcoming earnings, just-reported flag, news headlines |
 | `analyst.py` | One LLM call → strict-JSON `buy`/`decline` with reasoning + risks |
 | `telegram_bot.py` | Approve/Deny buttons in your chat; unanswered proposals expire |
@@ -45,7 +45,10 @@ flowchart LR
 - **Price band**: your approval means "buy near $X". If the price has moved
   outside ±1% by execution time, the proposal is voided, not chased.
 - **Limit orders only**, sized at a fixed $ amount, with a cash floor.
-- **Cooldown**: a trigger fires once per symbol per 5 days, not every 15 minutes.
+- **Cooldown**: an analyzed trigger fires once per symbol per 5 days.
+- **Scale throttles**: the full S&P 500 is scanned (~10 batched API calls per
+  cycle), but triggers are ranked by severity and capped (default 3 per cycle,
+  6 per day) so a red market day can't flood your Telegram or the FMP/LLM budget.
 - **`ALPACA_ENV` is required** — set it to `paper` or `live` yourself; there
   is no default.
 - State is in-memory: restarting the process clears open proposals and

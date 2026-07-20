@@ -2,6 +2,7 @@
 ever sees data fetched here - it is never allowed to supply facts from memory."""
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 import httpx
@@ -42,6 +43,23 @@ def snapshot(symbol: str) -> dict:
         # trigger right after a report usually IS the report's aftermath.
         "just_reported": _just_reported(recent, date.today()),
     }
+
+
+def sp500_symbols(cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
+    """Current S&P 500 constituents from FMP, cached on disk."""
+    import time
+    from pathlib import Path
+
+    cache = Path(cache_dir) / "sp500.json"
+    if cache.exists() and (time.time() - cache.stat().st_mtime) < cache_days * 86400:
+        return json.loads(cache.read_text())
+    rows = _get("sp500_constituent") or []
+    symbols = sorted({r["symbol"] for r in rows if r.get("symbol")})
+    if not symbols:
+        raise RuntimeError("S&P 500 constituent list came back empty")
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text(json.dumps(symbols))
+    return symbols
 
 
 def news(symbol: str, limit: int = 8) -> list[dict]:

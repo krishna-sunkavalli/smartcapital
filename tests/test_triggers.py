@@ -11,23 +11,42 @@ def make_df(closes):
                          "low": closes, "volume": [1e6] * len(closes)})
 
 
+def types(df, price, cfg=None):
+    return {t.trigger_type for t in detect(df, price, cfg or TriggersCfg())}
+
+
 def test_down_day_fires_at_threshold():
     df = make_df([100.0] * 250)
     cfg = TriggersCfg(down_day_pct=0.05)
-    assert "down_day" in {t.trigger_type for t in detect(df, 95.0, cfg)}
-    assert "down_day" not in {t.trigger_type for t in detect(df, 96.0, cfg)}
+    assert "down_day" in types(df, 95.0, cfg)
+    assert "down_day" not in types(df, 96.0, cfg)
 
 
-def test_below_ema200_fires():
-    df = make_df([100.0] * 250)  # EMA-200 of a constant series is 100
-    cfg = TriggersCfg()
-    assert "below_ema200" in {t.trigger_type for t in detect(df, 99.0, cfg)}
-    assert "below_ema200" not in {t.trigger_type for t in detect(df, 101.0, cfg)}
+def test_down_day_severity_scales_with_drop():
+    df = make_df([100.0] * 250)
+    t92 = next(t for t in detect(df, 92.0, TriggersCfg()) if t.trigger_type == "down_day")
+    t94 = next(t for t in detect(df, 94.0, TriggersCfg()) if t.trigger_type == "down_day")
+    assert t92.severity > t94.severity
+
+
+def test_ema200_cross_down_fires_on_the_crossing():
+    # Closed exactly at the EMA yesterday, live price now below -> crossing
+    df = make_df([100.0] * 250)
+    assert "ema200_cross_down" in types(df, 99.0)
+    assert "ema200_cross_down" not in types(df, 101.0)
+
+
+def test_ema200_already_below_does_not_refire():
+    # A stock in a downtrend: yesterday's close already well below its EMA-200.
+    df = make_df(list(np.linspace(150, 100, 250)))
+    close, ema = df["close"], df["close"].ewm(span=200, adjust=False).mean()
+    assert float(close.iloc[-1]) < float(ema.iloc[-1])  # sanity: state is "below"
+    assert "ema200_cross_down" not in types(df, 99.0)   # ...but no crossing event
 
 
 def test_no_ema200_trigger_without_enough_history():
     df = make_df([100.0] * 150)
-    assert "below_ema200" not in {t.trigger_type for t in detect(df, 90.0, TriggersCfg())}
+    assert "ema200_cross_down" not in types(df, 90.0)
 
 
 def test_short_history_no_triggers():
@@ -54,4 +73,14 @@ def test_cooldown_roundtrip():
     store.start_cooldown("MSFT", "down_day", now + timedelta(days=5))
     assert store.in_cooldown("MSFT", "down_day", now)
     assert not store.in_cooldown("MSFT", "down_day", now + timedelta(days=6))
-    assert not store.in_cooldown("MSFT", "below_ema200", now)
+    assert not store.in_cooldown("MSFT", "ema200_cross_down", now)
+
+
+def test_daily_analysis_budget():
+    from smartcapital.state import Store
+
+    store = Store()
+    assert store.analyses_today() == 0
+    store.record_analysis()
+    store.record_analysis()
+    assert store.analyses_today() == 2

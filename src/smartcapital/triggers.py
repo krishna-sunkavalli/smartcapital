@@ -1,14 +1,18 @@
 """v1 triggers - deterministic, thresholds from config, pure functions:
 
-1. down_day:     price down >= N% vs previous daily close
-2. below_ema200: price below the 200-day EMA
+1. down_day:         price down >= N% vs previous daily close
+2. ema200_cross_down: price crossing DOWN through the 200-day EMA - an event
+   (yesterday closed at/above it, live price is below it), not a state. At
+   S&P-500 scale ~a third of the index is *below* its EMA-200 at any time, so
+   a state trigger would flood the pipeline; a crossing fires once.
 
-Cooldown (persisted in db.py) makes each (symbol, trigger) fire once per
-window instead of every polling cycle.
+Each trigger carries a `severity` used to rank candidates when more triggers
+fire in one cycle than the analysis caps allow. Cooldown (in state.py) makes
+each (symbol, trigger) fire once per window.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -19,6 +23,7 @@ from smartcapital.config import TriggersCfg
 class Trigger:
     trigger_type: str
     details: dict
+    severity: float = 0.0  # bigger = more extreme = analyzed first
 
 
 def ta_snapshot(df: pd.DataFrame, latest_price: float) -> dict:
@@ -50,16 +55,20 @@ def detect(df: pd.DataFrame, latest_price: float, cfg: TriggersCfg) -> list[Trig
     close = df["close"]
     prev_close = float(close.iloc[-1])
 
-    # 1. Down >= N% on the day
+    # 1. Down >= N% on the day (severity = how far past the threshold)
     change = latest_price / prev_close - 1
     if change <= -cfg.down_day_pct:
-        out.append(Trigger("down_day", {"day_change_pct": round(change * 100, 2)}))
+        out.append(Trigger("down_day",
+                           {"day_change_pct": round(change * 100, 2)},
+                           severity=abs(change)))
 
-    # 2. Below the 200-day EMA
+    # 2. Crossing DOWN through the 200-day EMA
     if len(close) >= 200:
         ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
-        if latest_price < ema200:
-            out.append(Trigger("below_ema200", {
+        if prev_close >= ema200 and latest_price < ema200:
+            pct_below = 1 - latest_price / ema200
+            out.append(Trigger("ema200_cross_down", {
                 "price": latest_price, "ema200": round(ema200, 2),
-                "pct_below": round((1 - latest_price / ema200) * 100, 2)}))
+                "pct_below": round(pct_below * 100, 2)},
+                severity=pct_below))
     return out

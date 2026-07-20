@@ -14,6 +14,14 @@ class TriggersCfg(BaseModel):
     cooldown_days: int = 5
 
 
+class ScanCfg(BaseModel):
+    # Throttles for large universes: the human gate (you) is the scarce
+    # resource, so triggers are ranked by severity and capped.
+    max_analyses_per_cycle: int = 3
+    max_analyses_per_day: int = 6
+    universe_cache_days: int = 7
+
+
 class OrderCfg(BaseModel):
     notional_usd: float = 500.0
     price_band_pct: float = 0.01
@@ -31,8 +39,11 @@ class ApprovalCfg(BaseModel):
 
 
 class Config(BaseModel):
-    watchlist: list[str] = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "CRM"]
+    # "sp500" scans the full S&P 500 (list fetched from FMP, cached);
+    # or provide an explicit ticker list.
+    watchlist: str | list[str] = "sp500"
     triggers: TriggersCfg = TriggersCfg()
+    scan: ScanCfg = ScanCfg()
     order: OrderCfg = OrderCfg()
     llm: LlmCfg = LlmCfg()
     approval: ApprovalCfg = ApprovalCfg()

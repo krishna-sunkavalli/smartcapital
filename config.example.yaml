@@ -1,12 +1,22 @@
 # SmartCapital v1 configuration. Copy to config.yaml.
 
-watchlist: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, CRM]
+# "sp500" scans the full S&P 500; or give an explicit list:
+# watchlist: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, CRM]
+watchlist: sp500
 
 triggers:
   poll_interval_minutes: 15
   down_day_pct: 0.05            # trigger: stock down >= 5% vs previous close
-  # trigger: price below EMA-200 (fires when it closes below, then cools down)
+  # trigger: price crossing DOWN through its EMA-200 (an event, not a state)
   cooldown_days: 5              # a trigger fires once per symbol per N days
+
+scan:
+  # At S&P-500 scale a red day can fire dozens of triggers at once. Triggers
+  # are ranked by severity; only the top N become LLM analyses. The rest are
+  # logged and can re-fire next cycle if still valid.
+  max_analyses_per_cycle: 3
+  max_analyses_per_day: 6       # also caps Telegram pings and FMP/LLM spend
+  universe_cache_days: 7        # refresh the S&P constituent list weekly
 
 order:
   notional_usd: 500.0           # fixed order size for v1

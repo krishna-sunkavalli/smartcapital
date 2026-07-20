@@ -57,6 +57,15 @@ class Store:
         self.proposals: dict[str, Proposal] = {}
         self.cooldowns: dict[tuple[str, str], datetime] = {}
         self.events: list[dict] = []
+        self.analyses_by_day: dict[str, int] = {}
+
+    # --- daily analysis budget -------------------------------------------
+    def analyses_today(self, now: datetime | None = None) -> int:
+        return self.analyses_by_day.get((now or utcnow()).date().isoformat(), 0)
+
+    def record_analysis(self, now: datetime | None = None) -> None:
+        key = (now or utcnow()).date().isoformat()
+        self.analyses_by_day[key] = self.analyses_by_day.get(key, 0) + 1
 
     # --- proposals ---------------------------------------------------------
     def add(self, p: Proposal) -> Proposal:
