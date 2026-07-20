@@ -35,7 +35,7 @@ flowchart LR
 | `telegram_bot.py` | Approve/Deny buttons in your chat; unanswered proposals expire |
 | `executor.py` | Pre-submit re-checks, then a limit order; tracks to fill |
 | `engine.py` | Wires the pipeline |
-| `state.py` | In-memory state: proposals, cooldowns, event log |
+| `state.py` | Proposals + event log in memory; cooldowns + daily budget persisted to a JSON state file |
 | `cli.py` | `smartcapital run` |
 
 ## Behavior notes
@@ -51,8 +51,10 @@ flowchart LR
   6 per day) so a red market day can't flood your Telegram or the FMP/LLM budget.
 - **`ALPACA_ENV` is required** — set it to `paper` or `live` yourself; there
   is no default.
-- State is in-memory: restarting the process clears open proposals and
-  cooldowns.
+- **Restart-safe**: cooldowns and the daily analysis budget persist to a small
+  JSON state file (`STATE_FILE`, default `.state.json`), so a restart mid-day
+  can't re-analyze or re-ping. Pending proposals die with the process, which
+  is safe - nothing survives to execute unexpectedly.
 
 ## Setup
 
@@ -73,6 +75,12 @@ the bot once, then put your chat id in `TELEGRAM_CHAT_ID` (get it from
 ```bash
 pytest
 ```
+
+## Deployment
+
+See [deploy/azure-container-apps.md](deploy/azure-container-apps.md) for running
+this on Azure Container Apps (single always-on replica, Azure Files-backed
+state, secrets as ACA secrets). A `Dockerfile` is included.
 
 ## Roadmap (kept out of v1 on purpose)
 

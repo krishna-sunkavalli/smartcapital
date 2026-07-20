@@ -62,8 +62,9 @@ class Secrets(BaseSettings):
     telegram_chat_id: str = ""
 
 
-def load_config(path: str | Path = "config.yaml") -> Config:
-    p = Path(path)
+def load_config(path: str | Path | None = None) -> Config:
+    import os
+    p = Path(path or os.environ.get("SMARTCAPITAL_CONFIG", "config.yaml"))
     if not p.exists():
         p = Path("config.example.yaml")
     if p.exists():

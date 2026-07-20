@@ -62,12 +62,12 @@ def test_ta_snapshot_fields():
     assert isinstance(snap["avg_volume_20d"], int)
 
 
-def test_cooldown_roundtrip():
+def test_cooldown_roundtrip(tmp_path):
     from datetime import timedelta
 
     from smartcapital.state import Store, utcnow
 
-    store = Store()
+    store = Store(tmp_path / "state.json")
     now = utcnow()
     assert not store.in_cooldown("MSFT", "down_day", now)
     store.start_cooldown("MSFT", "down_day", now + timedelta(days=5))
@@ -76,11 +76,51 @@ def test_cooldown_roundtrip():
     assert not store.in_cooldown("MSFT", "ema200_cross_down", now)
 
 
-def test_daily_analysis_budget():
+def test_daily_analysis_budget(tmp_path):
     from smartcapital.state import Store
 
-    store = Store()
+    store = Store(tmp_path / "state.json")
     assert store.analyses_today() == 0
     store.record_analysis()
     store.record_analysis()
     assert store.analyses_today() == 2
+
+
+def test_state_survives_restart(tmp_path):
+    from datetime import timedelta
+
+    from smartcapital.state import Store, utcnow
+
+    path = tmp_path / "state.json"
+    first = Store(path)
+    first.start_cooldown("NVDA", "down_day", utcnow() + timedelta(days=5))
+    first.record_analysis()
+    first.record_analysis()
+
+    reborn = Store(path)  # simulated restart
+    assert reborn.in_cooldown("NVDA", "down_day")
+    assert reborn.analyses_today() == 2
+
+
+def test_expired_cooldowns_not_reloaded(tmp_path):
+    from datetime import timedelta
+
+    from smartcapital.state import Store, utcnow
+
+    path = tmp_path / "state.json"
+    first = Store(path)
+    first.start_cooldown("OLD", "down_day", utcnow() - timedelta(days=1))
+    first.start_cooldown("FRESH", "down_day", utcnow() + timedelta(days=1))
+
+    reborn = Store(path)
+    assert not reborn.in_cooldown("OLD", "down_day")
+    assert reborn.in_cooldown("FRESH", "down_day")
+
+
+def test_corrupt_state_file_starts_fresh(tmp_path):
+    from smartcapital.state import Store
+
+    path = tmp_path / "state.json"
+    path.write_text("{not json")
+    store = Store(path)
+    assert store.cooldowns == {} and store.analyses_today() == 0
