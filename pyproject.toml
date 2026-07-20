@@ -1,0 +1,40 @@
+[project]
+name = "aiis"
+version = "2.0.0"
+description = "Human-Approved AI Investment System v2 - deterministic triggers, adversarial LLM analysis, hardened human approval, idempotent execution"
+requires-python = ">=3.11"
+dependencies = [
+    "alpaca-py>=0.21",
+    "anthropic>=0.40",
+    "httpx>=0.27",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "SQLAlchemy>=2.0",
+    "python-telegram-bot>=21.0",
+    "PyYAML>=6.0",
+    "APScheduler>=3.10",
+    "tenacity>=8.2",
+]
+
+[project.optional-dependencies]
+lumibot = ["lumibot>=3.8"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "freezegun>=1.4", "ruff>=0.4"]
+
+[project.scripts]
+aiis = "aiis.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
