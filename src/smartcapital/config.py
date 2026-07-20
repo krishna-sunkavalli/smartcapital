@@ -21,9 +21,9 @@ class OrderCfg(BaseModel):
 
 
 class LlmCfg(BaseModel):
-    model: str = "claude-sonnet-5"
-    max_tokens: int = 1500
-    temperature: float = 0.0
+    model: str = "claude-opus-4-8"
+    max_tokens: int = 8000          # covers internal thinking + the JSON verdict
+    effort: str = "high"            # low | medium | high | xhigh | max
 
 
 class ApprovalCfg(BaseModel):

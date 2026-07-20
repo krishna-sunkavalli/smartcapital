@@ -1,16 +1,27 @@
 """Single-pass LLM analyst: given the trigger and the data packet, recommend
-BUY or DECLINE with reasoning and risks. Strict JSON out; anything malformed
-is treated as DECLINE. The model must use only packet data - never memory -
-for prices and fundamentals.
+BUY or DECLINE with reasoning and risks.
+
+Implementation notes (current Claude API):
+- Structured outputs (output_config.format with a JSON schema) guarantee the
+  response is valid JSON matching VERDICT_SCHEMA - "recommendation" can only
+  ever be "buy" or "decline" at the API level.
+- Adaptive thinking is set explicitly (on Opus 4.8, omitting `thinking` runs
+  without thinking); the model reasons internally before answering.
+- No sampling parameters: temperature/top_p/top_k are removed on this model
+  family and would return a 400.
+- Any degenerate outcome (refusal, truncation, unparseable text) is treated
+  as DECLINE - the conservative default.
 """
 from __future__ import annotations
 
 import json
-import re
+import logging
 
 from anthropic import Anthropic
 
 from smartcapital.config import LlmCfg, secrets
+
+log = logging.getLogger(__name__)
 
 SYSTEM = """You are the analysis step of a human-approved investing assistant.
 Rules:
@@ -28,16 +39,27 @@ Rules:
 
 PROMPT = """A '{trigger_type}' trigger fired for {symbol}: {trigger_details}
 
-Data packet (technicals + fundamentals):
+Data packet (technicals + fundamentals + news headlines):
 {packet}
 
-Respond with STRICT JSON only:
-{{
-  "recommendation": "buy" | "decline",
-  "reasoning": "<3-5 sentences>",
-  "key_risks": ["...", "..."],
-  "confidence": "low" | "medium" | "high"
-}}"""
+Weigh the evidence and return your verdict."""
+
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "recommendation": {"type": "string", "enum": ["buy", "decline"]},
+        "reasoning": {
+            "type": "string",
+            "description": "3-5 sentences: the case for this verdict, grounded in packet data",
+        },
+        "key_risks": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["recommendation", "reasoning", "key_risks", "confidence"],
+    "additionalProperties": False,
+}
+
+DECLINE = {"recommendation": "decline", "key_risks": [], "confidence": "low"}
 
 
 def analyze(symbol: str, trigger_type: str, trigger_details: dict, packet: dict,
@@ -46,30 +68,38 @@ def analyze(symbol: str, trigger_type: str, trigger_details: dict, packet: dict,
     msg = client.messages.create(
         model=cfg.model,
         max_tokens=cfg.max_tokens,
-        temperature=cfg.temperature,
+        thinking={"type": "adaptive"},
+        output_config={"effort": cfg.effort, "format": {"type": "json_schema",
+                                                        "schema": VERDICT_SCHEMA}},
         system=SYSTEM,
         messages=[{"role": "user", "content": PROMPT.format(
             symbol=symbol, trigger_type=trigger_type,
             trigger_details=json.dumps(trigger_details),
             packet=json.dumps(packet, indent=2, default=str))}],
     )
-    text = "".join(b.text for b in msg.content if b.type == "text")
-    verdict = _parse(text)
+
+    if msg.stop_reason == "refusal":
+        verdict = dict(DECLINE, reasoning="model refused the request")
+    elif msg.stop_reason == "max_tokens":
+        verdict = dict(DECLINE, reasoning="output truncated before a verdict was produced")
+    else:
+        text = next((b.text for b in msg.content if b.type == "text"), "")
+        verdict = parse_verdict(text)
+
     verdict["model"] = cfg.model
+    verdict["usage"] = {"input_tokens": msg.usage.input_tokens,
+                        "output_tokens": msg.usage.output_tokens}
     return verdict
 
 
-def _parse(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
-        return {"recommendation": "decline", "reasoning": "unparseable model output",
-                "key_risks": [], "confidence": "low", "raw": text[:500]}
+def parse_verdict(text: str) -> dict:
+    """Structured outputs guarantee schema-valid JSON on a normal stop; this
+    fallback exists so even an impossible malformation still means DECLINE."""
     try:
-        v = json.loads(m.group(0))
+        v = json.loads(text)
     except json.JSONDecodeError:
-        return {"recommendation": "decline", "reasoning": "invalid JSON from model",
-                "key_risks": [], "confidence": "low", "raw": text[:500]}
-    if str(v.get("recommendation", "")).lower() not in ("buy", "decline"):
-        v["recommendation"] = "decline"
-    v["recommendation"] = v["recommendation"].lower()
+        log.error("unparseable verdict text: %r", text[:200])
+        return dict(DECLINE, reasoning="unparseable model output")
+    if v.get("recommendation") not in ("buy", "decline"):
+        return dict(DECLINE, reasoning="verdict missing recommendation")
     return v

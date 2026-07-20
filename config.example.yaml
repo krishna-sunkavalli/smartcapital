@@ -14,9 +14,9 @@ order:
   min_cash_buffer_usd: 500.0    # never spend below this cash floor
 
 llm:
-  model: claude-sonnet-5
-  max_tokens: 1500
-  temperature: 0.0
+  model: claude-opus-4-8
+  max_tokens: 8000     # covers internal thinking + the JSON verdict
+  effort: high         # low | medium | high | xhigh | max
 
 approval:
   ttl_minutes: 60               # unanswered proposals expire; expiry = no action
