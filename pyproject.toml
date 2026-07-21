@@ -10,7 +10,6 @@ dependencies = [
     "pandas>=2.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
-    "SQLAlchemy>=2.0",
     "python-telegram-bot>=21.0",
     "PyYAML>=6.0",
     "APScheduler>=3.10",
