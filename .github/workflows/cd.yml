@@ -44,6 +44,9 @@ jobs:
             --image "$IMAGE:latest" \
             .
 
+      - name: ACR login (so Trivy can pull the image to scan)
+        run: az acr login --name "$ACR_NAME"
+
       - name: Trivy scan of the pushed image
         uses: aquasecurity/trivy-action@0.35.0
         with:
