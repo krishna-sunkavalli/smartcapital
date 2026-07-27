@@ -37,6 +37,7 @@ class Engine:
     def scan(self) -> list[str]:
         """One polling cycle. Returns ids of proposals awaiting approval."""
         if not self.market.market_open():
+            log.info("scan skipped: market closed")
             return []
         symbols = self.universe()
         bars = self.market.daily_bars_multi(symbols)
@@ -51,6 +52,9 @@ class Engine:
             for trig in triggers.detect(df, price, self.cfg.triggers):
                 if not self.store.in_cooldown(sym, trig.trigger_type):
                     candidates.append((sym, trig))
+
+        log.info("scan: %d symbols, %d bars, %d prices, %d candidates",
+                 len(symbols), len(bars), len(prices), len(candidates))
 
         # Phase 2: rank by severity and cap - the human gate is the scarce
         # resource. Skipped candidates get NO cooldown, so a still-valid
