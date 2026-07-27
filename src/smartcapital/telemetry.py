@@ -8,6 +8,7 @@ becomes a no-op so the pipeline never fails for a monitoring reason.
 
 Emitted signals (kept deliberately lean to cap ingestion cost):
 - ``smartcapital.heartbeat``        counter  - liveness; alert if it stops
+- ``smartcapital.decisions``        counter  - LLM verdicts (verdict=buy|decline)
 - ``smartcapital.proposals``        counter  - buy proposals sent for approval
 - ``smartcapital.orders.submitted`` counter  - limit orders submitted
 - ``smartcapital.orders.failed``    counter  - order submit failures (alert)
@@ -20,20 +21,21 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Rough Claude Opus pricing (USD per 1M tokens). Only used to emit an estimated
-# cost metric for the Azure Monitor budget alert; not billing-authoritative.
-_USD_PER_1M_INPUT = 15.0
-_USD_PER_1M_OUTPUT = 75.0
+# Rough Azure OpenAI gpt-5-mini pricing (USD per 1M tokens). Only used to emit an
+# estimated cost metric for the Azure Monitor budget alert; not
+# billing-authoritative. Update if the deployed model changes.
+_USD_PER_1M_INPUT = 0.25
+_USD_PER_1M_OUTPUT = 2.0
 
 _enabled = False
-_heartbeat = _proposals = _orders_submitted = _orders_failed = None
+_heartbeat = _decisions = _proposals = _orders_submitted = _orders_failed = None
 _llm_tokens = _llm_cost = None
 
 
 def setup_telemetry() -> bool:
     """Configure Azure Monitor + create metric instruments. Returns True if
     telemetry is active. Idempotent and never raises."""
-    global _enabled, _heartbeat, _proposals, _orders_submitted, _orders_failed
+    global _enabled, _heartbeat, _decisions, _proposals, _orders_submitted, _orders_failed
     global _llm_tokens, _llm_cost
     if _enabled:
         return True
@@ -51,6 +53,8 @@ def setup_telemetry() -> bool:
         meter = metrics.get_meter("smartcapital")
         _heartbeat = meter.create_counter("smartcapital.heartbeat", unit="1",
                                           description="scheduler liveness ticks")
+        _decisions = meter.create_counter("smartcapital.decisions", unit="1",
+                                          description="LLM verdicts (verdict=buy|decline)")
         _proposals = meter.create_counter("smartcapital.proposals", unit="1",
                                           description="buy proposals sent for approval")
         _orders_submitted = meter.create_counter("smartcapital.orders.submitted", unit="1",
@@ -72,6 +76,12 @@ def setup_telemetry() -> bool:
 def heartbeat() -> None:
     if _enabled and _heartbeat is not None:
         _heartbeat.add(1)
+
+
+def record_decision(symbol: str, verdict: str) -> None:
+    """Every LLM verdict, buy or decline - so decline volume is queryable."""
+    if _enabled and _decisions is not None:
+        _decisions.add(1, {"symbol": symbol, "verdict": verdict})
 
 
 def record_proposal(symbol: str) -> None:

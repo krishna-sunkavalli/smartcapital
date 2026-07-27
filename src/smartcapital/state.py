@@ -20,6 +20,15 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# LogRecord attribute names we must not clobber when passing event payload
+# fields through `extra=` (doing so raises "Attempt to overwrite ... in LogRecord").
+_LOGRECORD_ATTRS = frozenset((
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+    "created", "msecs", "relativeCreated", "thread", "threadName",
+    "processName", "process", "taskName", "message", "asctime",
+))
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -153,3 +162,9 @@ class Store:
         with self._lock:
             self.events.append({"at": utcnow().isoformat(), "kind": kind,
                                 "proposal_id": proposal_id, **payload})
+        # Also emit through the logger so every decision (declines included)
+        # reaches App Insights (AppTraces). The in-memory list above dies with
+        # the process; this is the durable, queryable record. Payload fields
+        # become custom dimensions; skip any that collide with LogRecord attrs.
+        safe = {k: v for k, v in payload.items() if k not in _LOGRECORD_ATTRS}
+        log.info("event:%s", kind, extra={"event": kind, "proposal_id": proposal_id, **safe})

@@ -111,5 +111,8 @@ class Engine:
             expires_at=(utcnow() + timedelta(minutes=self.cfg.approval.ttl_minutes)
                         if is_buy else None),
         ))
-        self.store.log("llm_" + verdict["recommendation"], p.id, symbol=symbol)
+        self.store.log("llm_" + verdict["recommendation"], p.id, symbol=symbol,
+                       confidence=verdict.get("confidence"),
+                       reasoning=verdict.get("reasoning"))
+        telemetry.record_decision(symbol, verdict["recommendation"])
         return p.id if p.status is Status.PENDING else None
