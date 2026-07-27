@@ -3,108 +3,91 @@
 The app is a single long-running worker: it polls market data on a schedule and
 long-polls Telegram for your taps. That shape maps to ACA as:
 
-- **No ingress** — all traffic is outbound (Alpaca, FMP, Anthropic, Telegram).
-- **Exactly one replica** (`--min-replicas 1 --max-replicas 1`). Never scale
-  this out: two replicas would double-analyze, double-ping, and fight over the
-  Telegram updates queue. And no scale-to-zero — the scheduler must be alive
-  during market hours.
-- **Azure Files volume at `/data`** — the state file (cooldowns + daily
-  analysis budget) survives container restarts and revision swaps.
-- **Secrets as ACA secrets**, injected as env vars.
+- **No ingress** — all traffic is outbound (Alpaca, FMP, Azure AI Foundry, Telegram).
+- **Exactly one replica** (`min = max = 1`). Never scale this out: two replicas
+  would double-analyze, double-ping, and fight over the Telegram updates queue.
+  And no scale-to-zero — the scheduler must be alive during market hours.
+- **Azure Files volume at `/data`** — the state file (cooldowns + daily analysis
+  budget) survives container restarts and revision swaps.
+- **Secrets from Key Vault**, referenced by the app's user-assigned managed
+  identity. No account keys and no model API key live in the image or env.
 
-Cost: a 0.25 vCPU / 0.5 GiB always-on app is a few dollars a month.
+Cost: a 0.25 vCPU / 0.5 GiB always-on app is a few dollars a month; the Claude
+analyst dominates the bill.
 
-## One-time setup
+## Recommended: infrastructure as code (`infra/main.bicep` via azd)
 
-```bash
-RG=smartcapital-rg
-LOC=eastus
-ACR=smartcapitalacr        # must be globally unique
-ENV=smartcapital-env
-APP=smartcapital
-SA=smartcapitalstate       # must be globally unique
-SHARE=smartcapital-data
-
-az group create -n $RG -l $LOC
-
-# 1. Registry + build the image from the repo root
-az acr create -n $ACR -g $RG --sku Basic --admin-enabled true
-az acr build -r $ACR -t smartcapital:latest .
-
-# 2. Container Apps environment
-az containerapp env create -n $ENV -g $RG -l $LOC
-
-# 3. Azure Files share for /data (state persistence)
-az storage account create -n $SA -g $RG -l $LOC --sku Standard_LRS
-az storage share-rm create --storage-account $SA -n $SHARE
-STORAGE_KEY=$(az storage account keys list -n $SA -g $RG --query "[0].value" -o tsv)
-az containerapp env storage set -n $ENV -g $RG \
-  --storage-name statefiles --azure-file-account-name $SA \
-  --azure-file-account-key "$STORAGE_KEY" --azure-file-share-name $SHARE \
-  --access-mode ReadWrite
-
-# 4. The app (fill in your real keys)
-az containerapp create -n $APP -g $RG --environment $ENV \
-  --image $ACR.azurecr.io/smartcapital:latest \
-  --registry-server $ACR.azurecr.io \
-  --cpu 0.25 --memory 0.5Gi \
-  --min-replicas 1 --max-replicas 1 \
-  --secrets alpaca-key=YOUR_KEY alpaca-secret=YOUR_SECRET \
-            fmp-key=YOUR_KEY anthropic-key=YOUR_KEY \
-            tg-token=YOUR_TOKEN \
-  --env-vars ALPACA_ENV=paper \
-             ALPACA_API_KEY=secretref:alpaca-key \
-             ALPACA_SECRET_KEY=secretref:alpaca-secret \
-             FMP_API_KEY=secretref:fmp-key \
-             ANTHROPIC_API_KEY=secretref:anthropic-key \
-             TELEGRAM_BOT_TOKEN=secretref:tg-token \
-             TELEGRAM_CHAT_ID=YOUR_CHAT_ID \
-             STATE_FILE=/data/state.json
-```
-
-Then attach the volume (create doesn't take mounts; patch the app definition):
+Everything below is provisioned by [`infra/main.bicep`](../infra/main.bicep):
+Log Analytics + Application Insights, a user-assigned managed identity, Key Vault
+(RBAC + purge protection), ACR (no admin user), a Storage account with a Files
+share (state) and a Table (audit), the Container Apps environment + Container App,
+an Azure AI Foundry account/project with a Claude deployment, least-privilege role
+assignments, and Azure Monitor alerts (heartbeat-missing, order-submit failures,
+daily LLM cost).
 
 ```bash
-az containerapp show -n $APP -g $RG -o yaml > app.yaml
-# In app.yaml under properties.template add:
-#   volumes:
-#   - name: data
-#     storageName: statefiles
-#     storageType: AzureFile
-# and under the container entry:
-#     volumeMounts:
-#     - volumeName: data
-#       mountPath: /data
-az containerapp update -n $APP -g $RG --yaml app.yaml
+# One tool, whole stack. Prompts for env name, region, and the secure params
+# (Alpaca/FMP/Telegram) which are stored in Key Vault.
+azd up
 ```
+
+`azd` builds the image from the [`Dockerfile`](../Dockerfile), pushes it to ACR,
+deploys the Bicep, and rolls the Container App. Re-run `azd deploy` for code-only
+changes or `azd provision` for infra-only changes.
+
+Or deploy the Bicep directly:
+
+```bash
+az group create -n smartcapital-rg -l eastus
+az deployment group create -g smartcapital-rg \
+  -f infra/main.bicep \
+  -p environmentName=smartcapital alertEmail=you@example.com \
+     telegramChatId=YOUR_CHAT_ID \
+     alpacaApiKey=... alpacaSecretKey=... fmpApiKey=... telegramBotToken=...
+```
+
+## How auth works (no keys at runtime)
+
+- **Alpaca / FMP / Telegram** — stored as Key Vault secrets; the Container App
+  references them via the managed identity (`Key Vault Secrets User`).
+- **Azure AI Foundry (the analyst)** — Entra only. `DefaultAzureCredential` picks
+  up the managed identity (the deploy injects `AZURE_CLIENT_ID`), which holds the
+  `Azure AI User` role on the Foundry account. The project endpoint is injected as
+  `AZURE_AI_PROJECT_ENDPOINT`.
+- **ACR pulls** — the same identity with `AcrPull`; admin user is disabled.
+
+Locally, `az login` supplies the same credential, so the analyst works on your
+machine without any changes.
+
+## CI/CD (GitHub Actions, OIDC — no stored cloud creds)
+
+- `.github/workflows/ci.yml` — ruff + pytest on every push/PR.
+- `.github/workflows/codeql.yml` — CodeQL for Python.
+- `.github/workflows/cd.yml` — federated `azure/login`, `az acr build`, a Trivy
+  image scan (fails on CRITICAL/HIGH), then `az containerapp update`. A
+  `production` GitHub Environment provides the human approval gate.
+- `.github/dependabot.yml` — weekly pip + actions updates.
+
+Set repo **variables** `AZURE_RESOURCE_GROUP`, `AZURE_CONTAINER_REGISTRY_NAME`,
+`AZURE_CONTAINER_APP_NAME` and **secrets** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID` (federated credential for the deploy identity).
 
 ## Config
 
-The image ships `config.example.yaml` (full S&P 500 scan, default caps) and
-falls back to it when no `config.yaml` exists. To customize without
-rebuilding, put a `config.yaml` on the file share and point at it:
-
-```bash
-az storage file upload --account-name $SA -s $SHARE --source config.yaml
-az containerapp update -n $APP -g $RG --set-env-vars SMARTCAPITAL_CONFIG=/data/config.yaml
-```
-
-## Ship a new version
-
-```bash
-az acr build -r $ACR -t smartcapital:latest .
-az containerapp update -n $APP -g $RG --image $ACR.azurecr.io/smartcapital:latest
-```
-
-The revision swap restarts the process; cooldowns and the daily analysis
-budget reload from `/data/state.json`, so an update mid-market-day won't
-re-analyze or re-ping.
+The image ships `config.example.yaml` (full S&P 500 scan, default caps) and falls
+back to it when no `config.yaml` exists. To customize without rebuilding, put a
+`config.yaml` on the file share and set `SMARTCAPITAL_CONFIG=/data/config.yaml`.
+Leave `llm.project_endpoint` blank to use the injected `AZURE_AI_PROJECT_ENDPOINT`.
 
 ## Watching it
 
 ```bash
-az containerapp logs show -n $APP -g $RG --follow
+az containerapp logs show -n <app> -g smartcapital-rg --follow
 ```
 
-Go-live checklist: `ALPACA_ENV=paper` until the paper run has behaved for a
-while; flipping to `live` is a deliberate env-var change, never a default.
+Telemetry (heartbeat, proposals, order submitted/failed, LLM tokens/cost) flows to
+Application Insights; the Bicep alerts page you if the heartbeat stops, an order
+submit fails, or daily LLM spend crosses the threshold.
+
+Go-live checklist: keep `ALPACA_ENV=paper` until the paper run has behaved for a
+while; flipping to `live` is a deliberate parameter change, never a default.

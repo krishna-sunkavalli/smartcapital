@@ -17,6 +17,10 @@ scan:
   max_analyses_per_cycle: 3
   max_analyses_per_day: 6       # also caps Telegram pings and FMP/LLM spend
   universe_cache_days: 7        # refresh the S&P constituent list weekly
+  # The S&P 500 list changes only a few times a year and FMP's live constituent
+  # endpoint is paid-only, so a bundled snapshot is used by default. Set true
+  # only if your FMP tier includes sp500-constituent.
+  # fmp_live_constituents: false
 
 order:
   notional_usd: 500.0           # fixed order size for v1
@@ -24,9 +28,16 @@ order:
   min_cash_buffer_usd: 500.0    # never spend below this cash floor
 
 llm:
-  model: claude-opus-4-8
+  # Azure AI Foundry project that hosts the analyst agent. Leave blank to read
+  # AZURE_AI_PROJECT_ENDPOINT from the environment (set by the Bicep deploy).
+  project_endpoint: ""
+  agent_name: smartcapital-analyst
+  model: gpt-5-mini   # the Azure OpenAI deployment name in the Foundry project
   max_tokens: 8000     # covers internal thinking + the JSON verdict
   effort: high         # low | medium | high | xhigh | max
+  # dry_run: true      # return a deterministic stub verdict (BUY) instead of
+                       # calling Foundry - lets the whole pipeline run locally
+                       # with no Azure. Or set env SMARTCAPITAL_LLM_DRY_RUN=1.
 
 approval:
   ttl_minutes: 60               # unanswered proposals expire; expiry = no action

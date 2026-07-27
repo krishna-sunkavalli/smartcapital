@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from smartcapital import analyst, fundamentals, triggers
+from smartcapital import analyst, fundamentals, telemetry, triggers
 from smartcapital.config import Config
 from smartcapital.market import Market
 from smartcapital.state import Proposal, Status, Store, utcnow
@@ -28,7 +28,10 @@ class Engine:
         if isinstance(self.cfg.watchlist, list):
             return self.cfg.watchlist
         if self.cfg.watchlist == "sp500":
-            return fundamentals.sp500_symbols(self.cfg.scan.universe_cache_days)
+            return fundamentals.sp500_symbols(
+                live=self.cfg.scan.fmp_live_constituents,
+                cache_days=self.cfg.scan.universe_cache_days,
+            )
         return [self.cfg.watchlist]
 
     def scan(self) -> list[str]:
@@ -70,12 +73,9 @@ class Engine:
         return out
 
     def _analyze(self, symbol: str, trig: Trigger, df, price: float) -> str | None:
-        self.store.start_cooldown(symbol, trig.trigger_type,
-                                  utcnow() + timedelta(days=self.cfg.triggers.cooldown_days))
-        self.store.record_analysis()
-        self.store.log("trigger_fired", None, symbol=symbol,
-                       trigger=trig.trigger_type, **trig.details)
-
+        # Gather data and get the verdict FIRST. Cooldown + daily-budget are only
+        # committed after a successful verdict, so a transient FMP/LLM error lets
+        # the symbol re-compete next cycle instead of burning the slot.
         packet = {
             "technicals": triggers.ta_snapshot(df, price),
             "fundamentals": fundamentals.snapshot(symbol),
@@ -83,6 +83,14 @@ class Engine:
         }
         verdict = analyst.analyze(symbol, trig.trigger_type, trig.details,
                                   packet, self.cfg.llm)
+
+        telemetry.record_llm_usage(verdict.get("usage"), verdict.get("model", self.cfg.llm.model))
+
+        self.store.start_cooldown(symbol, trig.trigger_type,
+                                  utcnow() + timedelta(days=self.cfg.triggers.cooldown_days))
+        self.store.record_analysis()
+        self.store.log("trigger_fired", None, symbol=symbol,
+                       trigger=trig.trigger_type, **trig.details)
 
         band = self.cfg.order.price_band_pct
         qty = max(1, int(self.cfg.order.notional_usd // price))

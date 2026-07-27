@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+    "alertEmail": { "value": "${ALERT_EMAIL}" },
+    "alpacaEnv": { "value": "${ALPACA_ENV=paper}" },
+    "telegramChatId": { "value": "${TELEGRAM_CHAT_ID}" },
+    "alpacaApiKey": { "value": "${ALPACA_API_KEY}" },
+    "alpacaSecretKey": { "value": "${ALPACA_SECRET_KEY}" },
+    "fmpApiKey": { "value": "${FMP_API_KEY}" },
+    "telegramBotToken": { "value": "${TELEGRAM_BOT_TOKEN}" }
+  }
+}

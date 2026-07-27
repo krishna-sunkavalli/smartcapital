@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.state.json
 *.db
 *.sqlite3
 .pytest_cache/
@@ -12,3 +13,5 @@ dist/
 build/
 config.yaml
 .cache/
+.vscode/
+.azure/

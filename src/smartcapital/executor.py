@@ -31,13 +31,25 @@ def execute(store: Store, p: Proposal, market: Market, cfg: Config) -> bool:
     if market.cash() - p.notional < cfg.order.min_cash_buffer_usd:
         return _void(store, p, "insufficient cash above buffer")
 
-    p.client_order_id = f"smartcap-{p.id}"
-    resp = market.trading.submit_order(LimitOrderRequest(
-        symbol=p.symbol, qty=p.qty, side=OrderSide.BUY,
-        limit_price=round(p.limit_high, 2),  # never worse than the approved band top
-        time_in_force=TimeInForce.DAY, client_order_id=p.client_order_id))
+    # Claim the proposal atomically so two scheduler threads can't both submit.
+    if not store.transition(p, Status.APPROVED, Status.EXECUTED):
+        return False
+    coid = f"smartcap-{p.id}"  # deterministic: broker dedups a retry, never double-fills
+    try:
+        resp = market.trading.submit_order(LimitOrderRequest(
+            symbol=p.symbol, qty=p.qty, side=OrderSide.BUY,
+            limit_price=round(p.limit_high, 2),  # never worse than the approved band top
+            time_in_force=TimeInForce.DAY, client_order_id=coid))
+    except Exception:
+        # Submit failed: roll back to APPROVED so the next cycle retries. The
+        # client_order_id is only recorded on success, so the guard above never
+        # strands the order.
+        store.transition(p, Status.EXECUTED, Status.APPROVED)
+        log.exception("order submit failed for %s (%s); will retry", p.symbol, p.id)
+        store.log("order_submit_failed", p.id, symbol=p.symbol)
+        return False
+    p.client_order_id = coid
     p.broker_order_id = str(resp.id)
-    p.status = Status.EXECUTED
     store.log("order_submitted", p.id, broker_order_id=str(resp.id),
               limit_price=round(p.limit_high, 2), qty=p.qty)
     return True
@@ -59,12 +71,16 @@ def sync_orders(store: Store, market: Market) -> list[tuple[str, str]]:
     transitions for user notification."""
     changes = []
     for p in store.with_status(Status.EXECUTED):
-        order = market.trading.get_order_by_client_id(p.client_order_id)
-        outcome = _BROKER_TERMINAL.get(str(order.status.value))
-        if outcome:
-            p.status = outcome
-            p.status_reason = (f"filled {order.filled_qty} @ {order.filled_avg_price}"
-                               if outcome is Status.FILLED else str(order.status.value))
-            store.log("order_" + outcome.value, p.id, detail=p.status_reason)
-            changes.append((p.symbol, p.status_reason))
+        try:
+            order = market.trading.get_order_by_client_id(p.client_order_id)
+            outcome = _BROKER_TERMINAL.get(str(order.status.value))
+            if outcome:
+                p.status = outcome
+                p.status_reason = (f"filled {order.filled_qty} @ {order.filled_avg_price}"
+                                   if outcome is Status.FILLED else str(order.status.value))
+                store.log("order_" + outcome.value, p.id, detail=p.status_reason)
+                changes.append((p.symbol, p.status_reason))
+        except Exception:
+            # One broker error must not abort tracking of the other open orders.
+            log.exception("sync failed for %s (%s)", p.symbol, p.id)
     return changes

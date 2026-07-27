@@ -3,6 +3,7 @@ buttons; unanswered proposals expire after the TTL (expiry = no action).
 """
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 
@@ -16,21 +17,28 @@ log = logging.getLogger(__name__)
 
 
 def format_message(p: Proposal) -> str:
+    """Telegram HTML. All LLM/dynamic content is escaped so reasoning or headlines
+    containing <, >, & (or Markdown metacharacters) can never break parsing and
+    silently drop the proposal."""
     v = p.llm_verdict or {}
     ta = (p.packet or {}).get("technicals", {})
     fu = (p.packet or {}).get("fundamentals", {})
-    risks = "\n".join(f"  • {r}" for r in v.get("key_risks", [])) or "  • (none listed)"
+    e = html.escape
+    risks = "\n".join(f"  • {e(str(r))}" for r in v.get("key_risks", [])) or "  • (none listed)"
+    pe = fu.get("pe_ttm") and round(fu["pe_ttm"], 1)
+    expires = f"{p.expires_at:%H:%M} UTC" if p.expires_at else "n/a"
     return (
-        f"*BUY {p.symbol}?*  (trigger: {p.trigger_type})\n"
+        f"<b>BUY {e(p.symbol)}?</b>  (trigger: {e(p.trigger_type)})\n"
         f"{p.qty:g} shares ≈ ${p.notional:,.0f}\n"
         f"Limit band: ${p.limit_low:,.2f} – ${p.limit_high:,.2f}\n"
-        f"Expires: {p.expires_at:%H:%M} UTC\n\n"
-        f"Price ${ta.get('price')}, day {ta.get('day_change_pct')}%, "
-        f"vs EMA-200 {ta.get('pct_vs_ema200')}%, off 52w high {ta.get('pct_off_52w_high')}%\n"
-        f"P/E {fu.get('pe_ttm') and round(fu['pe_ttm'], 1)}, sector {fu.get('sector')}\n\n"
-        f"*Why:* {v.get('reasoning', '')}\n\n"
-        f"*Risks:*\n{risks}\n\n"
-        f"Confidence: {v.get('confidence', '?')}  ·  Model: {p.llm_model}"
+        f"Expires: {expires}\n\n"
+        f"Price ${e(str(ta.get('price')))}, day {e(str(ta.get('day_change_pct')))}%, "
+        f"vs EMA-200 {e(str(ta.get('pct_vs_ema200')))}%, off 52w high "
+        f"{e(str(ta.get('pct_off_52w_high')))}%\n"
+        f"P/E {e(str(pe))}, sector {e(str(fu.get('sector')))}\n\n"
+        f"<b>Why:</b> {e(str(v.get('reasoning', '')))}\n\n"
+        f"<b>Risks:</b>\n{risks}\n\n"
+        f"Confidence: {e(str(v.get('confidence', '?')))}  ·  Model: {e(str(p.llm_model))}"
     )
 
 
@@ -50,8 +58,16 @@ class ApprovalBot:
             InlineKeyboardButton("✅ Approve", callback_data=f"approve:{p.id}"),
             InlineKeyboardButton("❌ Deny", callback_data=f"deny:{p.id}"),
         ]])
-        await self.app.bot.send_message(chat_id=self.chat_id, text=format_message(p),
-                                        parse_mode="Markdown", reply_markup=kb)
+        try:
+            await self.app.bot.send_message(chat_id=self.chat_id, text=format_message(p),
+                                            parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            # A dropped send means a silently un-actioned proposal. Surface it and
+            # expire it so it never lingers as a phantom PENDING.
+            log.exception("failed to send proposal %s for %s", p.id, p.symbol)
+            self.store.log("proposal_send_failed", p.id, symbol=p.symbol)
+            self.store.transition(p, Status.PENDING, Status.EXPIRED)
+            return
         self.store.log("proposal_sent", p.id)
 
     async def on_callback(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -70,23 +86,25 @@ class ApprovalBot:
             await q.answer(f"Already {p.status.value}.", show_alert=True)
             return
         if p.expires_at and now > p.expires_at:
-            p.status = Status.EXPIRED
-            self.store.log("proposal_expired", p.id)
+            if self.store.transition(p, Status.PENDING, Status.EXPIRED):
+                self.store.log("proposal_expired", p.id)
             await q.answer("Expired — no action taken.", show_alert=True)
             return
 
+        target = Status.APPROVED if decision == "approve" else Status.DENIED
+        if not self.store.transition(p, Status.PENDING, target):
+            await q.answer(f"Already {p.status.value}.", show_alert=True)
+            return
         p.decided_at = now
-        if decision == "approve":
-            p.status = Status.APPROVED
+        if target is Status.APPROVED:
             self.store.log("proposal_approved", p.id)
             await q.answer("Approved — order will be placed if price is still in band.")
         else:
-            p.status = Status.DENIED
             self.store.log("proposal_denied", p.id)
             await q.answer("Denied. No action taken.")
 
     async def notify(self, text: str) -> None:
-        await self.app.bot.send_message(chat_id=self.chat_id, text=text, parse_mode="Markdown")
+        await self.app.bot.send_message(chat_id=self.chat_id, text=text)
 
 
 def expire_stale(store: Store, now: datetime | None = None) -> int:

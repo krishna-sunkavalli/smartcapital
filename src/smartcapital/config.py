@@ -20,6 +20,10 @@ class ScanCfg(BaseModel):
     max_analyses_per_cycle: int = 3
     max_analyses_per_day: int = 6
     universe_cache_days: int = 7
+    # The S&P 500 membership list changes only a few times a year and FMP's
+    # live constituent endpoint is paid-only, so we default to a bundled
+    # snapshot. Set true only if your FMP tier includes that endpoint.
+    fmp_live_constituents: bool = False
 
 
 class OrderCfg(BaseModel):
@@ -29,9 +33,17 @@ class OrderCfg(BaseModel):
 
 
 class LlmCfg(BaseModel):
-    model: str = "claude-opus-4-8"
+    # Azure AI Foundry: the analyst is a prompt agent backed by an Azure OpenAI
+    # model deployment, reached through the project endpoint with Entra auth (no key).
+    project_endpoint: str = ""   # https://<resource>.services.ai.azure.com/api/projects/<project>
+    agent_name: str = "smartcapital-analyst"
+    model: str = "gpt-5-mini"  # the Azure OpenAI *deployment name* in the Foundry project
     max_tokens: int = 8000          # covers internal thinking + the JSON verdict
     effort: str = "high"            # low | medium | high | xhigh | max
+    # When true, the analyst returns a deterministic stub instead of calling
+    # Foundry - lets the whole pipeline run locally with no Azure. Set via config
+    # or the SMARTCAPITAL_LLM_DRY_RUN env var.
+    dry_run: bool = False
 
 
 class ApprovalCfg(BaseModel):
@@ -57,7 +69,6 @@ class Secrets(BaseSettings):
     # No default on purpose: set ALPACA_ENV to "paper" or "live" explicitly.
     alpaca_env: str = ""
     fmp_api_key: str = ""
-    anthropic_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -69,8 +80,17 @@ def load_config(path: str | Path | None = None) -> Config:
         p = Path("config.example.yaml")
     if p.exists():
         with open(p) as f:
-            return Config.model_validate(yaml.safe_load(f) or {})
-    return Config()
+            cfg = Config.model_validate(yaml.safe_load(f) or {})
+    else:
+        cfg = Config()
+    # The Foundry endpoint is injected by the Azure deploy; env wins when the
+    # config file leaves it blank so the same image runs anywhere.
+    if not cfg.llm.project_endpoint:
+        cfg.llm.project_endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT", "")
+    # Env override for offline local testing (Path A): no Foundry call.
+    if os.environ.get("SMARTCAPITAL_LLM_DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on"):
+        cfg.llm.dry_run = True
+    return cfg
 
 
 @lru_cache

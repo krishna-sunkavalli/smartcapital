@@ -12,6 +12,7 @@ import enum
 import json
 import logging
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -69,6 +70,7 @@ class Store:
         self.cooldowns: dict[tuple[str, str], datetime] = {}
         self.events: list[dict] = []
         self.analyses_by_day: dict[str, int] = {}
+        self._lock = threading.RLock()
         self.path = Path(path) if path else Path(os.environ.get("STATE_FILE", ".state.json"))
         self._load()
 
@@ -110,19 +112,31 @@ class Store:
 
     def record_analysis(self, now: datetime | None = None) -> None:
         key = (now or utcnow()).date().isoformat()
-        self.analyses_by_day[key] = self.analyses_by_day.get(key, 0) + 1
-        self._save()
+        with self._lock:
+            self.analyses_by_day[key] = self.analyses_by_day.get(key, 0) + 1
+            self._save()
 
     # --- proposals ---------------------------------------------------------
     def add(self, p: Proposal) -> Proposal:
-        self.proposals[p.id] = p
+        with self._lock:
+            self.proposals[p.id] = p
         return p
 
     def get(self, proposal_id: str) -> Proposal | None:
         return self.proposals.get(proposal_id)
 
     def with_status(self, status: Status) -> list[Proposal]:
-        return [p for p in self.proposals.values() if p.status is status]
+        with self._lock:
+            return [p for p in self.proposals.values() if p.status is status]
+
+    def transition(self, p: Proposal, expected: Status, new: Status) -> bool:
+        """Atomically move a proposal from `expected` to `new`. Returns False if
+        another thread already changed it (check-then-act is done under the lock)."""
+        with self._lock:
+            if p.status is not expected:
+                return False
+            p.status = new
+            return True
 
     # --- cooldowns ---------------------------------------------------------
     def in_cooldown(self, symbol: str, trigger_type: str, now: datetime | None = None) -> bool:
@@ -130,10 +144,12 @@ class Store:
         return until is not None and until > (now or utcnow())
 
     def start_cooldown(self, symbol: str, trigger_type: str, until: datetime) -> None:
-        self.cooldowns[(symbol, trigger_type)] = until
-        self._save()
+        with self._lock:
+            self.cooldowns[(symbol, trigger_type)] = until
+            self._save()
 
     # --- event log ---------------------------------------------------------
     def log(self, kind: str, proposal_id: str | None = None, **payload) -> None:
-        self.events.append({"at": utcnow().isoformat(), "kind": kind,
-                            "proposal_id": proposal_id, **payload})
+        with self._lock:
+            self.events.append({"at": utcnow().isoformat(), "kind": kind,
+                                "proposal_id": proposal_id, **payload})

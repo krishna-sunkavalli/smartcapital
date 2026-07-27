@@ -27,7 +27,11 @@ async def _run() -> None:
     from smartcapital.executor import execute, sync_orders
     from smartcapital.state import Status, Store
     from smartcapital.telegram_bot import ApprovalBot, expire_stale
+    from smartcapital.telemetry import (
+        heartbeat, record_order_failed, record_order_submitted, record_proposal, setup_telemetry,
+    )
 
+    setup_telemetry()
     cfg = load_config()
     store = Store()
     engine = Engine(cfg, store)
@@ -35,19 +39,41 @@ async def _run() -> None:
     loop = asyncio.get_running_loop()
 
     def scan_job():
-        for pid in engine.scan():
+        try:
+            pids = engine.scan()
+        except Exception:
+            log.exception("scan cycle failed")
+            return
+        for pid in pids:
+            record_proposal(store.get(pid).symbol if store.get(pid) else "?")
             asyncio.run_coroutine_threadsafe(bot.send_proposal(pid), loop)
 
     def execute_job():
         for p in store.with_status(Status.APPROVED):
-            if execute(store, p, engine.market, cfg):
+            try:
+                submitted = execute(store, p, engine.market, cfg)
+            except Exception:
+                log.exception("execute failed for %s", p.symbol)
+                record_order_failed(p.symbol)
+                continue
+            if submitted:
+                record_order_submitted(p.symbol)
                 asyncio.run_coroutine_threadsafe(
-                    bot.notify(f"📤 Limit order submitted: {p.qty:g} {p.symbol} "
-                               f"@ ≤ ${p.limit_high:,.2f}"), loop)
+                    bot.notify(f"\U0001f4e4 Limit order submitted: {p.qty:g} {p.symbol} "
+                               f"@ \u2264 ${p.limit_high:,.2f}"), loop)
 
     def maintenance_job():
-        expire_stale(store)
-        for symbol, outcome in sync_orders(store, engine.market):
+        heartbeat()
+        try:
+            expire_stale(store)
+        except Exception:
+            log.exception("expire_stale failed")
+        try:
+            changes = sync_orders(store, engine.market)
+        except Exception:
+            log.exception("sync_orders failed")
+            return
+        for symbol, outcome in changes:
             asyncio.run_coroutine_threadsafe(bot.notify(f"📦 {symbol}: {outcome}"), loop)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
