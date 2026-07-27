@@ -10,6 +10,14 @@ from smartcapital.config import load_config, secrets
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("smartcapital")
 
+# Third-party loggers that log at INFO are both noisy and unsafe: httpx logs the
+# full Telegram API URL (which embeds the bot token) on every getUpdates poll,
+# and azure.core dumps all HTTP headers. Silence them to WARNING so no secret is
+# written to stdout/App Insights and to cut log-ingestion cost.
+for _noisy in ("httpx", "httpcore", "urllib3",
+               "azure.core.pipeline.policies.http_logging_policy"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="smartcapital")
