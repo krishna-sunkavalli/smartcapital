@@ -3,11 +3,14 @@ ever sees data fetched here - it is never allowed to supply facts from memory.""
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 
 import httpx
 
 from smartcapital.config import secrets
+
+log = logging.getLogger(__name__)
 
 # FMP retired the /api/v3 "legacy" endpoints; the current API lives under /stable
 # and takes the symbol as a query parameter (e.g. profile?symbol=AAPL).
@@ -21,12 +24,24 @@ def _get(path: str, **params):
     return r.json()
 
 
+def _safe_get(path: str, default, **params):
+    """Like :func:`_get` but never raises: a provider error (e.g. a 402 on an
+    endpoint the FMP plan doesn't cover, or a rate limit) degrades to ``default``
+    so the analysis still runs on whatever data is available. The analyst is
+    instructed to treat missing fields as a risk."""
+    try:
+        return _get(path, **params)
+    except httpx.HTTPError as e:
+        log.warning("FMP %s failed (%s); continuing without it", path, e)
+        return default
+
+
 def snapshot(symbol: str) -> dict:
     """One compact dict: profile, valuation, recent + upcoming earnings."""
-    profile = (_get("profile", symbol=symbol) or [{}])[0]
-    ratios = (_get("ratios-ttm", symbol=symbol) or [{}])[0]
+    profile = (_safe_get("profile", [{}], symbol=symbol) or [{}])[0]
+    ratios = (_safe_get("ratios-ttm", [{}], symbol=symbol) or [{}])[0]
     # Free tier caps limit at 5; that easily covers recent + next earnings.
-    earnings = _get("earnings", symbol=symbol, limit=5) or []
+    earnings = _safe_get("earnings", [], symbol=symbol, limit=5) or []
     recent, upcoming = split_earnings(earnings, date.today())
 
     return {

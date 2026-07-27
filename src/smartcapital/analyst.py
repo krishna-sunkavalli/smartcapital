@@ -108,8 +108,6 @@ def analyze(symbol: str, trigger_type: str, trigger_details: dict, packet: dict,
                             trigger_details=json.dumps(trigger_details),
                             packet=json.dumps(packet, indent=2, default=str)),
         max_output_tokens=cfg.max_tokens,
-        text={"format": {"type": "json_schema", "name": "verdict",
-                         "schema": VERDICT_SCHEMA, "strict": True}},
         extra_body={"agent_reference": {"name": agent_name, "type": "agent_reference"}},
     )
 
