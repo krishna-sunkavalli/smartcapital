@@ -1,10 +1,8 @@
 # Bundled S&P 500 constituent snapshot.
 #
-# The index membership list changes only a few times a year and FMP's live
-# `sp500-constituent` endpoint is paid-only, so smartcapital.fundamentals.
-# sp500_symbols() returns this bundled list by default. (Set scan.
-# fmp_live_constituents: true to fetch the live list instead, if your FMP tier
-# includes that endpoint; it falls back here on 401/402/403.)
+# The index membership list changes only a few times a year, so
+# smartcapital.fundamentals.sp500_symbols() returns this bundled list. Refresh
+# it manually a few times a year to track index changes.
 #
 # Format: one ticker per line, Alpaca style (dot for class shares, e.g. BRK.B),
 # blank lines and `#` comments ignored. This is a point-in-time snapshot

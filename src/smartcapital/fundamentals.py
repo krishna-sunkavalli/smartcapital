@@ -1,58 +1,105 @@
-"""Fundamentals + events + news from Financial Modeling Prep. The LLM only
-ever sees data fetched here - it is never allowed to supply facts from memory."""
+"""Fundamentals + earnings + news from Yahoo Finance (via yfinance). Keyless and
+covers the whole S&P 500 - FMP's free tier gated most symbols behind 402s. The
+LLM only ever sees data fetched here; it is never allowed to supply facts from
+memory.
+
+yfinance scrapes Yahoo, so calls can be throttled (especially from datacenter
+IPs). Every network path degrades gracefully to partial/empty data and results
+are cached briefly, so a throttle yields a thinner packet - which the analyst
+treats as a risk - rather than failing the whole analysis.
+"""
 from __future__ import annotations
 
-import json
 import logging
-from datetime import date
+import time
+from datetime import date, datetime, timezone
+from threading import Lock
 
-import httpx
-
-from smartcapital.config import secrets
+import pandas as pd
+import yfinance as yf
 
 log = logging.getLogger(__name__)
 
-# FMP retired the /api/v3 "legacy" endpoints; the current API lives under /stable
-# and takes the symbol as a query parameter (e.g. profile?symbol=AAPL).
-BASE = "https://financialmodelingprep.com/stable"
+# A short in-process cache smooths over Yahoo throttling and avoids refetching
+# the same symbol within a scan cycle. Keyed by (kind, symbol).
+_CACHE_TTL_SECONDS = 600
+_cache: dict[tuple[str, str], tuple[float, object]] = {}
+_cache_lock = Lock()
 
 
-def _get(path: str, **params):
-    params["apikey"] = secrets().fmp_api_key
-    r = httpx.get(f"{BASE}/{path}", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
+def _cache_get(kind: str, symbol: str):
+    with _cache_lock:
+        hit = _cache.get((kind, symbol))
+    if hit and (time.time() - hit[0]) < _CACHE_TTL_SECONDS:
+        return hit[1]
+    return None
 
 
-def _safe_get(path: str, default, **params):
-    """Like :func:`_get` but never raises: a provider error (e.g. a 402 on an
-    endpoint the FMP plan doesn't cover, or a rate limit) degrades to ``default``
-    so the analysis still runs on whatever data is available. The analyst is
-    instructed to treat missing fields as a risk."""
+def _cache_put(kind: str, symbol: str, value) -> None:
+    with _cache_lock:
+        _cache[(kind, symbol)] = (time.time(), value)
+
+
+def _num(v):
+    """Coerce a yfinance cell to float or None (NaN/missing -> None)."""
     try:
-        return _get(path, **params)
-    except httpx.HTTPError as e:
-        log.warning("FMP %s failed (%s); continuing without it", path, e)
-        return default
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_info(symbol: str) -> dict:
+    try:
+        return yf.Ticker(symbol).info or {}
+    except Exception as e:  # yfinance raises assorted errors on throttle/parse
+        log.warning("yfinance info failed for %s (%s); continuing without it", symbol, e)
+        return {}
+
+
+def _earnings(symbol: str) -> tuple[list[dict], list[dict]]:
+    """Recent (desc) and upcoming (asc) earnings rows from yfinance."""
+    try:
+        df = yf.Ticker(symbol).get_earnings_dates(limit=12)
+    except Exception as e:
+        log.warning("yfinance earnings failed for %s (%s); continuing without it", symbol, e)
+        return [], []
+    if df is None or df.empty:
+        return [], []
+    rows = [
+        {"date": ts.date().isoformat(),
+         "eps_actual": _num(row.get("Reported EPS")),
+         "eps_estimate": _num(row.get("EPS Estimate"))}
+        for ts, row in df.iterrows()
+    ]
+    return split_earnings(rows, date.today())
 
 
 def snapshot(symbol: str) -> dict:
-    """One compact dict: profile, valuation, recent + upcoming earnings."""
-    profile = (_safe_get("profile", [{}], symbol=symbol) or [{}])[0]
-    ratios = (_safe_get("ratios-ttm", [{}], symbol=symbol) or [{}])[0]
-    # Free tier caps limit at 5; that easily covers recent + next earnings.
-    earnings = _safe_get("earnings", [], symbol=symbol, limit=5) or []
-    recent, upcoming = split_earnings(earnings, date.today())
+    """One compact dict: profile, valuation, recent + upcoming earnings.
 
-    return {
-        "sector": profile.get("sector"),
-        "industry": profile.get("industry"),
-        "market_cap": profile.get("marketCap"),
-        "beta": profile.get("beta"),
-        "pe_ttm": ratios.get("priceToEarningsRatioTTM"),
-        "peg_ttm": ratios.get("priceToEarningsGrowthRatioTTM"),
-        "price_to_sales_ttm": ratios.get("priceToSalesRatioTTM"),
-        "debt_to_equity": ratios.get("debtToEquityRatioTTM"),
+    Missing fields (unknown, or the provider was throttled) come back as None;
+    the analyst is instructed to treat missing data as a risk.
+    """
+    cached = _cache_get("snap", symbol)
+    if cached is not None:
+        return cached
+    info = _safe_info(symbol)
+    recent, upcoming = _earnings(symbol)
+
+    snap = {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "market_cap": info.get("marketCap"),
+        "beta": info.get("beta"),
+        "pe_ttm": info.get("trailingPE"),
+        "peg_ttm": info.get("trailingPegRatio"),
+        "price_to_sales_ttm": info.get("priceToSalesTrailing12Months"),
+        # yfinance reports debt/equity as a percentage (e.g. 35.3); normalize to
+        # a ratio to match the analyst's expectation (e.g. 0.353).
+        "debt_to_equity": (info.get("debtToEquity") / 100
+                           if info.get("debtToEquity") is not None else None),
         "recent_earnings": recent[:4],
         "next_earnings_date": upcoming[0]["date"] if upcoming else None,
         "days_to_next_earnings": (
@@ -61,6 +108,8 @@ def snapshot(symbol: str) -> dict:
         # trigger right after a report usually IS the report's aftermath.
         "just_reported": _just_reported(recent, date.today()),
     }
+    _cache_put("snap", symbol, snap)
+    return snap
 
 
 def _bundled_sp500() -> list[str]:
@@ -77,68 +126,71 @@ def _bundled_sp500() -> list[str]:
     return sorted(symbols)
 
 
-def sp500_symbols(live: bool = False, cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
-    """S&P 500 constituents.
+def sp500_symbols(cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
+    """S&P 500 constituents from the bundled point-in-time snapshot.
 
-    The index membership list changes only a handful of times a year and FMP's
-    live `sp500-constituent` endpoint is paid-only, so by default we just return
-    the bundled snapshot (refresh it manually a few times a year). Pass
-    `live=True` only if your FMP tier includes that endpoint - it is then fetched
-    and cached on disk, falling back to the bundle if the tier still can't reach
-    it (401/402/403) or it comes back empty.
+    Index membership changes only a handful of times a year, so a bundled list
+    (refreshed manually) keeps the universe deterministic and free of an extra
+    live dependency. ``cache_days``/``cache_dir`` are accepted for call-site
+    compatibility but unused - the bundle needs no cache.
     """
-    if not live:
-        return _bundled_sp500()
-
-    import time
-    from pathlib import Path
-
-    cache = Path(cache_dir) / "sp500.json"
-    if cache.exists() and (time.time() - cache.stat().st_mtime) < cache_days * 86400:
-        return json.loads(cache.read_text())
-    try:
-        rows = _get("sp500-constituent") or []
-        symbols = sorted({r["symbol"] for r in rows if r.get("symbol")})
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code not in (401, 402, 403):
-            raise
-        symbols = _bundled_sp500()  # tier can't reach the paid endpoint
-    if not symbols:
-        symbols = _bundled_sp500()
-    cache.parent.mkdir(exist_ok=True)
-    cache.write_text(json.dumps(symbols))
-    return symbols
+    return _bundled_sp500()
 
 
 def news(symbol: str, limit: int = 8) -> list[dict]:
-    """Recent headlines for the symbol: date, title, source. Text only -
-    the LLM weighs them; nothing here triggers anything. Returns [] when the
-    account tier can't reach the (paid) news endpoint, so the pipeline degrades
-    gracefully rather than failing the whole analysis."""
+    """Recent headlines for the symbol: date, title, source. Text only - the
+    LLM weighs them; nothing here triggers anything, and all headline text is
+    treated as untrusted data. Degrades to [] on any provider error."""
+    cached = _cache_get("news", symbol)
+    if cached is not None:
+        return cached
     try:
-        rows = _get("news/stock", symbols=symbol, limit=limit) or []
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (401, 402, 403):
-            return []
-        raise
-    return [
-        {"date": r.get("publishedDate"), "title": r.get("title"), "source": r.get("site")}
-        for r in rows
-    ]
+        raw = yf.Ticker(symbol).news or []
+    except Exception as e:
+        log.warning("yfinance news failed for %s (%s); continuing without it", symbol, e)
+        raw = []
+    out: list[dict] = []
+    for item in raw[:limit]:
+        c = item.get("content", item)  # yfinance nests the article under 'content'
+        title = c.get("title")
+        if not title:
+            continue
+        provider = c.get("provider")
+        source = provider.get("displayName") if isinstance(provider, dict) else provider
+        out.append({"date": _news_date(c.get("pubDate")), "title": title, "source": source})
+    _cache_put("news", symbol, out)
+    return out
+
+
+def _news_date(pub) -> str | None:
+    """yfinance pubDate is an ISO-8601 string (e.g. '2026-07-27T15:03:16Z');
+    reduce it to a plain date, tolerating epoch ints or missing values."""
+    if pub is None:
+        return None
+    if isinstance(pub, (int, float)):
+        return datetime.fromtimestamp(pub, tz=timezone.utc).date().isoformat()
+    try:
+        return datetime.fromisoformat(str(pub).replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
 
 
 def split_earnings(rows: list[dict], today: date) -> tuple[list[dict], list[dict]]:
-    """FMP's earnings feed mixes past reports (epsActual set) and scheduled
-    future dates (epsActual null). Split into (recent desc, upcoming asc)."""
+    """Split normalized earnings rows into (recent desc, upcoming asc).
+
+    Rows use ``{date, eps_actual, eps_estimate}``. A date today-or-later is
+    treated as upcoming (a scheduled report, ``eps_actual`` still None);
+    anything earlier is a past report.
+    """
     recent, upcoming = [], []
     for r in rows:
         d = r.get("date")
         if not d:
             continue
-        entry = {"date": d, "eps_actual": r.get("epsActual"), "eps_estimate": r.get("epsEstimated")}
-        if date.fromisoformat(d) > today or r.get("epsActual") is None:
-            if date.fromisoformat(d) >= today:
-                upcoming.append(entry)
+        entry = {"date": d, "eps_actual": r.get("eps_actual"),
+                 "eps_estimate": r.get("eps_estimate")}
+        if date.fromisoformat(d) >= today:
+            upcoming.append(entry)
         else:
             recent.append(entry)
     recent.sort(key=lambda e: e["date"], reverse=True)

@@ -29,7 +29,6 @@ class Engine:
             return self.cfg.watchlist
         if self.cfg.watchlist == "sp500":
             return fundamentals.sp500_symbols(
-                live=self.cfg.scan.fmp_live_constituents,
                 cache_days=self.cfg.scan.universe_cache_days,
             )
         return [self.cfg.watchlist]

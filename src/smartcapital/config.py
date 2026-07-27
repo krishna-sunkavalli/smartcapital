@@ -20,10 +20,6 @@ class ScanCfg(BaseModel):
     max_analyses_per_cycle: int = 3
     max_analyses_per_day: int = 6
     universe_cache_days: int = 7
-    # The S&P 500 membership list changes only a few times a year and FMP's
-    # live constituent endpoint is paid-only, so we default to a bundled
-    # snapshot. Set true only if your FMP tier includes that endpoint.
-    fmp_live_constituents: bool = False
 
 
 class OrderCfg(BaseModel):
@@ -51,7 +47,7 @@ class ApprovalCfg(BaseModel):
 
 
 class Config(BaseModel):
-    # "sp500" scans the full S&P 500 (list fetched from FMP, cached);
+    # "sp500" scans the full S&P 500 (bundled point-in-time snapshot);
     # or provide an explicit ticker list.
     watchlist: str | list[str] = "sp500"
     triggers: TriggersCfg = TriggersCfg()
@@ -68,7 +64,6 @@ class Secrets(BaseSettings):
     alpaca_secret_key: str = ""
     # No default on purpose: set ALPACA_ENV to "paper" or "live" explicitly.
     alpaca_env: str = ""
-    fmp_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 

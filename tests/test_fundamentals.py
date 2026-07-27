@@ -1,17 +1,15 @@
 from datetime import date
 
-import httpx
-
 from smartcapital import fundamentals
 from smartcapital.fundamentals import _bundled_sp500, _just_reported, split_earnings
 
 TODAY = date(2026, 7, 20)
 
 ROWS = [
-    {"date": "2026-10-28", "epsActual": None, "epsEstimated": 2.10},   # scheduled
-    {"date": "2026-07-29", "epsActual": None, "epsEstimated": 1.95},   # scheduled, 9 days out
-    {"date": "2026-04-30", "epsActual": 1.88, "epsEstimated": 1.80},   # reported, beat
-    {"date": "2026-01-29", "epsActual": 1.50, "epsEstimated": 1.60},   # reported, miss
+    {"date": "2026-10-28", "eps_actual": None, "eps_estimate": 2.10},   # scheduled
+    {"date": "2026-07-29", "eps_actual": None, "eps_estimate": 1.95},   # scheduled, 9 days out
+    {"date": "2026-04-30", "eps_actual": 1.88, "eps_estimate": 1.80},   # reported, beat
+    {"date": "2026-01-29", "eps_actual": 1.50, "eps_estimate": 1.60},   # reported, miss
 ]
 
 
@@ -50,21 +48,33 @@ def test_bundled_sp500_loads():
     assert not any(s.startswith("#") for s in symbols)
 
 
-def test_sp500_symbols_defaults_to_bundle(monkeypatch):
-    def _boom(path, **params):  # must never be called in the default path
-        raise AssertionError("live FMP endpoint hit when it should not be")
-
-    monkeypatch.setattr(fundamentals, "_get", _boom)
+def test_sp500_symbols_returns_bundle():
     assert fundamentals.sp500_symbols() == _bundled_sp500()
 
 
-def test_sp500_symbols_live_falls_back_on_402(monkeypatch, tmp_path):
-    def _boom(path, **params):
-        req = httpx.Request("GET", f"https://x/{path}")
-        raise httpx.HTTPStatusError("paid", request=req,
-                                    response=httpx.Response(402, request=req))
+def test_news_date_parses_iso_and_none():
+    assert fundamentals._news_date("2026-07-27T15:03:16Z") == "2026-07-27"
+    assert fundamentals._news_date(None) is None
 
-    monkeypatch.setattr(fundamentals, "_get", _boom)
-    symbols = fundamentals.sp500_symbols(live=True, cache_dir=str(tmp_path))
-    assert symbols == _bundled_sp500()
+
+class _Boom:
+    """Stands in for yf.Ticker to simulate a throttled/unavailable provider."""
+    def __init__(self, *a, **k):
+        raise RuntimeError("provider throttled")
+
+
+def test_snapshot_degrades_gracefully(monkeypatch):
+    monkeypatch.setattr(fundamentals.yf, "Ticker", _Boom)
+    fundamentals._cache.clear()
+    snap = fundamentals.snapshot("ZZZZ")
+    assert snap["sector"] is None
+    assert snap["recent_earnings"] == []
+    assert snap["next_earnings_date"] is None
+    assert snap["just_reported"] is None
+
+
+def test_news_degrades_to_empty(monkeypatch):
+    monkeypatch.setattr(fundamentals.yf, "Ticker", _Boom)
+    fundamentals._cache.clear()
+    assert fundamentals.news("ZZZZ") == []
 

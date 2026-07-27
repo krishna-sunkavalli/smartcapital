@@ -15,12 +15,8 @@ scan:
   # are ranked by severity; only the top N become LLM analyses. The rest are
   # logged and can re-fire next cycle if still valid.
   max_analyses_per_cycle: 3
-  max_analyses_per_day: 6       # also caps Telegram pings and FMP/LLM spend
-  universe_cache_days: 7        # refresh the S&P constituent list weekly
-  # The S&P 500 list changes only a few times a year and FMP's live constituent
-  # endpoint is paid-only, so a bundled snapshot is used by default. Set true
-  # only if your FMP tier includes sp500-constituent.
-  # fmp_live_constituents: false
+  max_analyses_per_day: 6       # also caps Telegram pings and LLM spend
+  universe_cache_days: 7        # (reserved) the S&P universe is a bundled snapshot
 
 order:
   notional_usd: 500.0           # fixed order size for v1
