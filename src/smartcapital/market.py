@@ -13,6 +13,21 @@ from alpaca.trading.client import TradingClient
 from smartcapital.config import secrets
 
 
+def _completed_sessions(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop today's still-forming daily bar so callers see only closed sessions.
+
+    While the market is open Alpaca returns a partial bar for the current
+    session as the last row. Leaving it in makes ``close.iloc[-1]`` (used as the
+    previous close by triggers) equal to today's live price, which collapses the
+    day-change to ~0% and hides real intraday moves (e.g. a -5% day). Triggers
+    require the *previous* session close, so exclude the current UTC date.
+    """
+    if df is None or df.empty:
+        return df
+    today = datetime.now(timezone.utc).date()
+    return df[df.index.date < today]
+
+
 class Market:
     def __init__(self) -> None:
         s = secrets()
@@ -32,7 +47,8 @@ class Market:
             StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, start=start)).df
         if bars.empty:
             return bars
-        return bars.xs(symbol) if isinstance(bars.index, pd.MultiIndex) else bars
+        df = bars.xs(symbol) if isinstance(bars.index, pd.MultiIndex) else bars
+        return _completed_sessions(df)
 
     # --- batched variants: ~10 API calls for the whole S&P 500 instead of ~1000
     def latest_prices(self, symbols: list[str], chunk: int = 200) -> dict[str, float]:
@@ -55,9 +71,9 @@ class Market:
                 continue
             if isinstance(bars.index, pd.MultiIndex):
                 for sym in bars.index.get_level_values(0).unique():
-                    out[sym] = bars.xs(sym)
+                    out[sym] = _completed_sessions(bars.xs(sym))
             else:  # single-symbol chunk comes back flat
-                out[symbols[i]] = bars
+                out[symbols[i]] = _completed_sessions(bars)
         return out
 
     def market_open(self) -> bool:
