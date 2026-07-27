@@ -27,6 +27,27 @@ def test_missing_recommendation_declines():
     assert v["recommendation"] == "decline"
 
 
+def test_fenced_json_is_parsed():
+    v = parse_verdict('```json\n{"recommendation": "buy", "reasoning": "ok", '
+                      '"key_risks": [], "confidence": "low"}\n```')
+    assert v["recommendation"] == "buy"
+
+
+def test_recommendation_is_case_normalised():
+    v = parse_verdict(json.dumps({
+        "recommendation": "DECLINE", "reasoning": "x",
+        "key_risks": [], "confidence": "low"}))
+    assert v["recommendation"] == "decline"
+
+
+def test_prose_wrapped_json_is_extracted():
+    v = parse_verdict('Here is my verdict:\n{"recommendation": "Buy", '
+                      '"reasoning": "held support", "key_risks": [], "confidence": "high"} '
+                      'Hope that helps!')
+    assert v["recommendation"] == "buy"
+    assert v["confidence"] == "high"
+
+
 def test_schema_is_strict():
     # additionalProperties: false + full required list is what lets the API
     # guarantee the shape; guard against accidental loosening.

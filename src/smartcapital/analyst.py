@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 
 from smartcapital.config import LlmCfg
@@ -142,13 +143,41 @@ def _stub_verdict(symbol: str, trigger_type: str, cfg: LlmCfg) -> dict:
 
 
 def parse_verdict(text: str) -> dict:
-    """Structured outputs guarantee schema-valid JSON on a normal stop; this
-    fallback exists so even an impossible malformation still means DECLINE."""
+    """Turn the model's reply into a schema-valid verdict, defaulting to DECLINE.
+
+    We instruct the agent to answer with a bare JSON object, but without the
+    Responses ``json_schema`` constraint (which can't be combined with an
+    ``agent_reference``) the model occasionally wraps it in markdown fences,
+    adds a sentence of prose, or capitalises the enum. This parser is tolerant
+    of those shapes and logs the raw reply whenever it still can't extract a
+    valid recommendation, so misbehaviour is diagnosable instead of silent.
+    """
+    raw = text or ""
     try:
-        v = json.loads(text)
+        v = json.loads(_extract_json(raw))
     except json.JSONDecodeError:
-        log.error("unparseable verdict text: %r", text[:200])
+        log.error("unparseable verdict text: %r", raw[:300])
         return dict(DECLINE, reasoning="unparseable model output")
-    if v.get("recommendation") not in ("buy", "decline"):
+    if not isinstance(v, dict):
+        log.error("verdict was not a JSON object: %r", raw[:300])
+        return dict(DECLINE, reasoning="unparseable model output")
+    rec = str(v.get("recommendation", "")).strip().lower()
+    if rec not in ("buy", "decline"):
+        log.error("verdict missing/invalid recommendation %r in: %r",
+                  v.get("recommendation"), raw[:300])
         return dict(DECLINE, reasoning="verdict missing recommendation")
+    v["recommendation"] = rec
     return v
+
+
+_FENCE_RE = re.compile(r"^```(?:json)?|```$", re.IGNORECASE | re.MULTILINE)
+
+
+def _extract_json(text: str) -> str:
+    """Best-effort isolation of a JSON object: strip markdown code fences and
+    any prose surrounding the outermost ``{...}`` span."""
+    t = _FENCE_RE.sub("", text).strip()
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end > start:
+        return t[start:end + 1]
+    return t
