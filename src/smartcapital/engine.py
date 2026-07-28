@@ -119,8 +119,21 @@ class Engine:
                        trigger=trig.trigger_type, **trig.details)
 
         band = self.cfg.order.price_band_pct
-        qty = max(1, int(self.cfg.order.notional_usd // price))
+        # Whole shares only: a single share must fit inside the per-trade
+        # notional, otherwise buying even one share overspends the budget. Such
+        # a buy is recorded as VOIDED (non-actionable) rather than forced to 1.
+        qty = int(self.cfg.order.notional_usd // price)
         is_buy = verdict["recommendation"] == "buy"
+        unaffordable = is_buy and qty < 1
+        if unaffordable:
+            self.store.log("buy_unaffordable", None, symbol=symbol,
+                           price=round(price, 2), notional=self.cfg.order.notional_usd)
+        if is_buy and not unaffordable:
+            status = Status.PENDING
+        elif is_buy:
+            status = Status.VOIDED
+        else:
+            status = Status.DECLINED
         p = self.store.add(Proposal(
             symbol=symbol,
             trigger_type=trig.trigger_type,
@@ -133,9 +146,9 @@ class Engine:
             limit_high=round(price * (1 + band), 2),
             qty=float(qty),
             notional=qty * price,
-            status=Status.PENDING if is_buy else Status.DECLINED,
+            status=status,
             expires_at=(utcnow() + timedelta(minutes=self.cfg.approval.ttl_minutes)
-                        if is_buy else None),
+                        if status is Status.PENDING else None),
         ))
         self.store.log("llm_" + verdict["recommendation"], p.id, symbol=symbol,
                        confidence=verdict.get("confidence"),

@@ -35,7 +35,6 @@ class LlmCfg(BaseModel):
     agent_name: str = "smartcapital-analyst"
     model: str = "gpt-5-mini"  # the Azure OpenAI *deployment name* in the Foundry project
     max_tokens: int = 8000          # covers internal thinking + the JSON verdict
-    effort: str = "high"            # low | medium | high | xhigh | max
     # When true, the analyst returns a deterministic stub instead of calling
     # Foundry - lets the whole pipeline run locally with no Azure. Set via config
     # or the SMARTCAPITAL_LLM_DRY_RUN env var.
@@ -44,6 +43,9 @@ class LlmCfg(BaseModel):
 
 class ApprovalCfg(BaseModel):
     ttl_minutes: int = 60
+    # Max age of an approval before execution; a stale approval (e.g. granted
+    # just before close, unfilled into the next session) is voided, not placed.
+    execute_ttl_minutes: int = 120
 
 
 class Config(BaseModel):

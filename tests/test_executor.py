@@ -99,6 +99,37 @@ def test_only_acts_on_approved(tmp_path):
     assert execute(store, p, market, Config()) is False
 
 
+def test_reserves_cash_for_open_orders_and_voids_when_buffer_breached(tmp_path):
+    # One order already submitted (EXECUTED, unfilled) reserves its notional, so
+    # the next approval must be voided rather than breaching the cash buffer.
+    store = _store(tmp_path)
+    cfg = Config()
+    cfg.order.min_cash_buffer_usd = 500.0
+    store.add(make_proposal(symbol="MSFT", status=Status.EXECUTED,
+                            client_order_id="smartcap-open", notional=600.0))
+    p = store.add(make_proposal(notional=600.0))
+    market = FakeMarket(cash=1000.0)  # 1000 - 600 reserved - 600 = -200 < 500
+
+    assert execute(store, p, market, cfg) is False
+    assert p.status is Status.VOIDED
+    assert market.trading.submitted == []
+
+
+def test_stale_approval_is_voided_before_execution(tmp_path):
+    from datetime import timedelta
+
+    from smartcapital.state import utcnow
+    store = _store(tmp_path)
+    cfg = Config()
+    old = utcnow() - timedelta(minutes=cfg.approval.execute_ttl_minutes + 1)
+    p = store.add(make_proposal(decided_at=old))
+    market = FakeMarket(trading=FakeTrading(submit=SimpleNamespace(id="broker-x")))
+
+    assert execute(store, p, market, cfg) is False
+    assert p.status is Status.VOIDED
+    assert market.trading.submitted == []
+
+
 class MappedTrading:
     """get_order_by_client_id returns/raises per client_order_id."""
 

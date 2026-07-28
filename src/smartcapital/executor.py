@@ -6,13 +6,14 @@ order id is derived from the proposal id so a retry can't double-submit.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest
 
 from smartcapital.config import Config
 from smartcapital.market import Market
-from smartcapital.state import Proposal, Status, Store
+from smartcapital.state import Proposal, Status, Store, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -23,12 +24,24 @@ def execute(store: Store, p: Proposal, market: Market, cfg: Config) -> bool:
     if p.client_order_id:  # already submitted: never resubmit
         return False
 
+    # Stale approvals must never execute on a day-old thesis: if the approval is
+    # older than the execute TTL (e.g. approved just before close, unfilled next
+    # session), void it instead of placing the order.
+    ttl = timedelta(minutes=cfg.approval.execute_ttl_minutes)
+    if p.decided_at and utcnow() - p.decided_at > ttl:
+        return _void(store, p, "approval expired before execution")
+
     if not market.market_open():
         return False  # not voided - retried next cycle while approval is fresh
     live = market.latest_price(p.symbol)
     if not (p.limit_low <= live <= p.limit_high):
         return _void(store, p, f"price {live} left approved band [{p.limit_low}, {p.limit_high}]")
-    if market.cash() - p.notional < cfg.order.min_cash_buffer_usd:
+    # Reserve cash for orders already submitted but not yet filled: Alpaca's
+    # `cash` doesn't drop until fill, so without this several approvals placed in
+    # one execute cycle would each pass against the same balance and breach the
+    # buffer.
+    reserved = sum(q.notional for q in store.with_status(Status.EXECUTED))
+    if market.cash() - reserved - p.notional < cfg.order.min_cash_buffer_usd:
         return _void(store, p, "insufficient cash above buffer")
 
     # Claim the proposal atomically so two scheduler threads can't both submit.
@@ -56,9 +69,11 @@ def execute(store: Store, p: Proposal, market: Market, cfg: Config) -> bool:
 
 
 def _void(store: Store, p: Proposal, reason: str) -> bool:
-    p.status = Status.VOIDED
-    p.status_reason = reason
-    store.log("proposal_voided", p.id, reason=reason)
+    # Atomic: only void a still-APPROVED proposal so we never clobber a status
+    # another thread just moved on.
+    if store.transition(p, Status.APPROVED, Status.VOIDED):
+        p.status_reason = reason
+        store.log("proposal_voided", p.id, reason=reason)
     return False
 
 
@@ -74,8 +89,7 @@ def sync_orders(store: Store, market: Market) -> list[tuple[str, str]]:
         try:
             order = market.trading.get_order_by_client_id(p.client_order_id)
             outcome = _BROKER_TERMINAL.get(str(order.status.value))
-            if outcome:
-                p.status = outcome
+            if outcome and store.transition(p, Status.EXECUTED, outcome):
                 p.status_reason = (f"filled {order.filled_qty} @ {order.filled_avg_price}"
                                    if outcome is Status.FILLED else str(order.status.value))
                 store.log("order_" + outcome.value, p.id, detail=p.status_reason)

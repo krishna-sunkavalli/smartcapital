@@ -47,6 +47,35 @@ def test_success_commits_cooldown_and_budget(tmp_path, monkeypatch):
     assert store.in_cooldown("AAPL", "down_day") is True
 
 
+def test_affordable_buy_becomes_pending(tmp_path, monkeypatch):
+    from smartcapital.state import Status
+    engine, store = _engine(tmp_path, monkeypatch)
+    monkeypatch.setattr("smartcapital.engine.analyst.analyze",
+                        lambda *a, **k: {"recommendation": "buy", "model": "m"})
+
+    pid = engine._analyze("AAPL", TRIG, df=None, price=100.0)
+
+    assert pid is not None
+    (p,) = store.with_status(Status.PENDING)
+    assert p.qty == 5.0  # 500 // 100
+
+
+def test_buy_priced_above_notional_is_voided_not_forced_to_one(tmp_path, monkeypatch):
+    # $900 share vs $500 notional: buying one share would overspend, so the buy
+    # is recorded VOIDED and never sent for approval.
+    from smartcapital.state import Status
+    engine, store = _engine(tmp_path, monkeypatch)
+    monkeypatch.setattr("smartcapital.engine.analyst.analyze",
+                        lambda *a, **k: {"recommendation": "buy", "model": "m"})
+
+    pid = engine._analyze("BRKB", TRIG, df=None, price=900.0)
+
+    assert pid is None  # not actionable
+    (p,) = store.with_status(Status.VOIDED)
+    assert p.qty == 0.0
+    assert p.notional == 0.0
+
+
 def _bars(volume: float) -> pd.DataFrame:
     return pd.DataFrame({"volume": [volume] * 20})
 

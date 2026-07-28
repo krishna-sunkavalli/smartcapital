@@ -31,10 +31,10 @@ llm:
   agent_name: smartcapital-analyst
   model: gpt-5-mini   # the Azure OpenAI deployment name in the Foundry project
   max_tokens: 8000     # covers internal thinking + the JSON verdict
-  effort: high         # low | medium | high | xhigh | max
   # dry_run: true      # return a deterministic stub verdict (BUY) instead of
                        # calling Foundry - lets the whole pipeline run locally
                        # with no Azure. Or set env SMARTCAPITAL_LLM_DRY_RUN=1.
 
 approval:
   ttl_minutes: 60               # unanswered proposals expire; expiry = no action
+  execute_ttl_minutes: 120      # approvals older than this are voided, not placed

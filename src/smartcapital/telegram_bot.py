@@ -104,7 +104,12 @@ class ApprovalBot:
             await q.answer("Denied. No action taken.")
 
     async def notify(self, text: str) -> None:
-        await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+        # Fire-and-forget from the scheduler: swallow and log transport errors so
+        # a Telegram hiccup never crashes the caller or vanishes silently.
+        try:
+            await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+        except Exception:
+            log.exception("failed to send notification")
 
 
 def expire_stale(store: Store, now: datetime | None = None) -> int:
@@ -112,7 +117,9 @@ def expire_stale(store: Store, now: datetime | None = None) -> int:
     n = 0
     for p in store.with_status(Status.PENDING):
         if p.expires_at and now > p.expires_at:
-            p.status = Status.EXPIRED
-            store.log("proposal_expired", p.id, swept=True)
-            n += 1
+            # Atomic: a proposal the user approved microseconds ago must not be
+            # clobbered to EXPIRED by this sweep.
+            if store.transition(p, Status.PENDING, Status.EXPIRED):
+                store.log("proposal_expired", p.id, swept=True)
+                n += 1
     return n
