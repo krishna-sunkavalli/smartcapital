@@ -2,9 +2,11 @@
 
 Cooldowns and the daily analysis counter are persisted to a small JSON file
 (STATE_FILE, default .state.json) so a restart mid-day can't re-analyze the
-same stocks and re-ping you. Proposals and the event log stay in-memory:
-pending proposals dying with the process is safe (nothing survives to execute
-unexpectedly).
+same stocks and re-ping you. Most proposals stay in-memory (a pending proposal
+dying with the process is safe). The exception is in-flight EXECUTED orders
+(submitted, not yet filled): a slim record of those is persisted so a restart -
+which happens on every deploy - can keep tracking them to their fill and still
+notify you, instead of losing the outcome.
 """
 from __future__ import annotations
 
@@ -83,7 +85,7 @@ class Store:
         self.path = Path(path) if path else Path(os.environ.get("STATE_FILE", ".state.json"))
         self._load()
 
-    # --- persistence (cooldowns + daily counter only) ---------------------
+    # --- persistence (cooldowns + daily counter + in-flight orders) -------
     def _load(self) -> None:
         if not self.path.exists():
             return
@@ -99,14 +101,41 @@ class Store:
             if dt > now:
                 self.cooldowns[(symbol, trigger_type)] = dt
         self.analyses_by_day = {k: int(v) for k, v in data.get("analyses_by_day", {}).items()}
+        for entry in data.get("open_orders", []):
+            p = self._rebuild_executed(entry)
+            self.proposals[p.id] = p
+
+    @staticmethod
+    def _rebuild_executed(e: dict) -> Proposal:
+        # Slim stub carrying only what sync_orders needs to reach the broker and
+        # notify: the packet/verdict aren't restored (not needed post-submit).
+        # client_order_id is deterministic (smartcap-<id>) so it's recoverable
+        # even if the process died before it was recorded.
+        pid = e["id"]
+        return Proposal(
+            symbol=e["symbol"], trigger_type="", trigger_details={}, packet={},
+            llm_model=e.get("llm_model", ""), llm_verdict={}, reference_price=0.0,
+            limit_low=0.0, limit_high=0.0, qty=float(e.get("qty", 0.0)),
+            notional=float(e.get("notional", 0.0)), status=Status.EXECUTED, id=pid,
+            client_order_id=e.get("client_order_id") or f"smartcap-{pid}",
+            broker_order_id=e.get("broker_order_id"),
+        )
 
     def _save(self) -> None:
         now = utcnow()
+        with self._lock:
+            open_orders = [
+                {"id": p.id, "symbol": p.symbol, "qty": p.qty, "notional": p.notional,
+                 "llm_model": p.llm_model, "client_order_id": p.client_order_id,
+                 "broker_order_id": p.broker_order_id}
+                for p in self.proposals.values() if p.status is Status.EXECUTED
+            ]
         data = {
             "cooldowns": {f"{s}|{t}": dt.isoformat()
                           for (s, t), dt in self.cooldowns.items() if dt > now},
             "analyses_by_day": {k: v for k, v in self.analyses_by_day.items()
                                 if k >= now.date().isoformat()},
+            "open_orders": open_orders,
         }
         try:
             tmp = self.path.with_suffix(".tmp")
@@ -145,7 +174,19 @@ class Store:
             if p.status is not expected:
                 return False
             p.status = new
+            # Persist only when the in-flight (EXECUTED) set changes, so a
+            # restart keeps tracking submitted-but-unfilled orders.
+            if Status.EXECUTED in (expected, new):
+                self._save()
             return True
+
+    def mark_submitted(self, p: Proposal, client_order_id: str, broker_order_id: str) -> None:
+        """Record broker ids for a just-submitted order and persist it so the
+        outcome survives a restart."""
+        with self._lock:
+            p.client_order_id = client_order_id
+            p.broker_order_id = broker_order_id
+            self._save()
 
     # --- cooldowns ---------------------------------------------------------
     def in_cooldown(self, symbol: str, trigger_type: str, now: datetime | None = None) -> bool:

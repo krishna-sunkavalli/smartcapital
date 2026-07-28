@@ -95,12 +95,33 @@ def _ensure_agent(cfg: LlmCfg):
                 raise RuntimeError("llm.project_endpoint is not set (Foundry project endpoint)")
             project = AIProjectClient(endpoint=cfg.project_endpoint,
                                       credential=DefaultAzureCredential())
-            agent = project.agents.create_version(
-                agent_name=cfg.agent_name,
-                definition=PromptAgentDefinition(model=cfg.model, instructions=SYSTEM),
-            )
-            _project, _agent_name = project, agent.name
+            if not _agent_version_is_current(project, cfg):
+                # Only cut a new version when the current one is missing or its
+                # model/instructions drifted - avoids a fresh version on every
+                # process start (each deploy) piling up unused versions.
+                project.agents.create_version(
+                    agent_name=cfg.agent_name,
+                    definition=PromptAgentDefinition(model=cfg.model, instructions=SYSTEM),
+                )
+            _project, _agent_name = project, cfg.agent_name
         return _project, _agent_name
+
+
+def _agent_version_is_current(project, cfg: LlmCfg) -> bool:
+    """Best-effort check that the latest server-side version already matches our
+    model + instructions. Any SDK/lookup failure returns False so the caller
+    falls back to creating a version (exactly the prior behaviour)."""
+    try:
+        existing = project.agents.get_version(agent_name=cfg.agent_name, agent_version="latest")
+    except Exception:
+        try:
+            existing = project.agents.get(cfg.agent_name)
+        except Exception:
+            return False
+    definition = getattr(existing, "definition", None)
+    return (definition is not None
+            and getattr(definition, "model", None) == cfg.model
+            and getattr(definition, "instructions", None) == SYSTEM)
 
 
 def analyze(symbol: str, trigger_type: str, trigger_details: dict, packet: dict,

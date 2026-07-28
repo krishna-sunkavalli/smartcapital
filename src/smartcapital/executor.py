@@ -61,8 +61,7 @@ def execute(store: Store, p: Proposal, market: Market, cfg: Config) -> bool:
         log.exception("order submit failed for %s (%s); will retry", p.symbol, p.id)
         store.log("order_submit_failed", p.id, symbol=p.symbol)
         return False
-    p.client_order_id = coid
-    p.broker_order_id = str(resp.id)
+    store.mark_submitted(p, coid, str(resp.id))
     store.log("order_submitted", p.id, broker_order_id=str(resp.id),
               limit_price=round(p.limit_high, 2), qty=p.qty)
     return True
