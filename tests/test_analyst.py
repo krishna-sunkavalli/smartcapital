@@ -48,6 +48,25 @@ def test_prose_wrapped_json_is_extracted():
     assert v["confidence"] == "high"
 
 
+def test_model_key_synonyms_are_accepted():
+    # gpt-5-mini observed returning decision/verdict/rationale + numeric confidence.
+    v = parse_verdict(json.dumps({
+        "ticker": "WDC", "decision": "DECLINE",
+        "confidence": 0.75, "rationale": "sector-wide memory selloff"}))
+    assert v["recommendation"] == "decline"
+    assert v["reasoning"] == "sector-wide memory selloff"
+    assert v["confidence"] == "high"  # 0.75 -> high
+
+
+def test_verdict_key_and_low_numeric_confidence():
+    v = parse_verdict(json.dumps({
+        "verdict": "buy", "rationale": "clear bounce",
+        "confidence": 0.3, "risks": ["earnings soon"]}))
+    assert v["recommendation"] == "buy"
+    assert v["confidence"] == "low"  # 0.3 -> low
+    assert v["key_risks"] == ["earnings soon"]
+
+
 def test_schema_is_strict():
     # additionalProperties: false + full required list is what lets the API
     # guarantee the shape; guard against accidental loosening.

@@ -41,8 +41,14 @@ Rules:
   reaction to that earnings report - analyze it as such.
 - You recommend; a human decides. Long equity only.
 - Be conservative: DECLINE is the default; BUY needs a clear case.
-- Respond with ONLY a single JSON object matching the required schema. No prose,
-  no markdown fences, no text before or after the JSON."""
+- Respond with ONLY a single JSON object with EXACTLY these four keys, spelled
+  and cased exactly as shown - no markdown fences, no text before or after:
+    {"recommendation": "buy" | "decline",
+     "reasoning": "3-5 sentences grounded in the packet",
+     "key_risks": ["short risk", "..."],
+     "confidence": "low" | "medium" | "high"}
+  Do NOT rename the keys (never "decision", "verdict", or "rationale") and do
+  NOT use a numeric confidence - use only low, medium, or high."""
 
 PROMPT = """A '{trigger_type}' trigger fired for {symbol}: {trigger_details}
 
@@ -147,10 +153,11 @@ def parse_verdict(text: str) -> dict:
 
     We instruct the agent to answer with a bare JSON object, but without the
     Responses ``json_schema`` constraint (which can't be combined with an
-    ``agent_reference``) the model occasionally wraps it in markdown fences,
-    adds a sentence of prose, or capitalises the enum. This parser is tolerant
-    of those shapes and logs the raw reply whenever it still can't extract a
-    valid recommendation, so misbehaviour is diagnosable instead of silent.
+    ``agent_reference``) the shape is only prompt-enforced. gpt-5-mini sometimes
+    wraps it in markdown fences, adds prose, capitalises the enum, or renames the
+    keys (``decision``/``verdict``/``rationale``, numeric confidence). This parser
+    tolerates those variants and logs the raw reply whenever it still can't find a
+    recommendation, so misbehaviour is diagnosable instead of silent.
     """
     raw = text or ""
     try:
@@ -161,16 +168,42 @@ def parse_verdict(text: str) -> dict:
     if not isinstance(v, dict):
         log.error("verdict was not a JSON object: %r", raw[:300])
         return dict(DECLINE, reasoning="unparseable model output")
-    rec = str(v.get("recommendation", "")).strip().lower()
+    rec = _first(v, _REC_KEYS)
+    rec = str(rec).strip().lower() if rec is not None else ""
     if rec not in ("buy", "decline"):
         log.error("verdict missing/invalid recommendation %r in: %r",
-                  v.get("recommendation"), raw[:300])
+                  rec or None, raw[:300])
         return dict(DECLINE, reasoning="verdict missing recommendation")
-    v["recommendation"] = rec
-    return v
+    reasoning = _first(v, _REASON_KEYS)
+    return {
+        "recommendation": rec,
+        "reasoning": str(reasoning) if reasoning is not None else "",
+        "key_risks": v.get("key_risks") or v.get("risks") or [],
+        "confidence": _coerce_confidence(v.get("confidence")),
+    }
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?|```$", re.IGNORECASE | re.MULTILINE)
+_REC_KEYS = ("recommendation", "decision", "verdict", "call", "action")
+_REASON_KEYS = ("reasoning", "rationale", "reason", "analysis")
+
+
+def _first(d: dict, keys: tuple[str, ...]):
+    """First present, non-empty value among ``keys`` (for model key synonyms)."""
+    for k in keys:
+        if d.get(k) not in (None, ""):
+            return d[k]
+    return None
+
+
+def _coerce_confidence(v) -> str:
+    """Accept the low/medium/high enum or a 0-1 numeric and bucket it."""
+    if isinstance(v, bool):
+        v = None
+    if isinstance(v, (int, float)):
+        return "high" if v >= 0.66 else "medium" if v >= 0.4 else "low"
+    s = str(v).strip().lower()
+    return s if s in ("low", "medium", "high") else "low"
 
 
 def _extract_json(text: str) -> str:
