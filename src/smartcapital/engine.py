@@ -7,6 +7,7 @@ rank by severity and apply per-cycle/daily caps -> gather TA + fundamentals
 from __future__ import annotations
 
 import logging
+import math
 from datetime import timedelta
 
 from smartcapital import analyst, fundamentals, telemetry, triggers
@@ -16,6 +17,27 @@ from smartcapital.state import Proposal, Status, Store, utcnow
 from smartcapital.triggers import Trigger
 
 log = logging.getLogger(__name__)
+
+# Floor for the liquidity proxy so an illiquid/halted name (zero or NaN volume)
+# still ranks on its severity rather than collapsing to zero.
+_MIN_DOLLAR_VOLUME = 1_000_000.0
+
+
+def _rank_score(trig: Trigger, df, price: float) -> float:
+    """Ranking key for the scarce analysis budget: trigger severity weighted by
+    a size/liquidity proxy so a deep drop in an obscure micro-cap doesn't crowd
+    out a meaningful drop in a heavily-traded mega-cap. Dollar volume
+    (price x 20-day average volume) is a keyless size proxy already implied by
+    the bars; log-scaling bounds the boost to roughly 1.7x from the smallest to
+    the largest S&P 500 name, so severity still dominates within a size tier."""
+    try:
+        avg_vol = float(df["volume"].tail(20).mean())
+    except Exception:
+        avg_vol = 0.0
+    if math.isnan(avg_vol):
+        avg_vol = 0.0
+    dollar_vol = max(price * avg_vol, _MIN_DOLLAR_VOLUME)
+    return trig.severity * math.log10(dollar_vol)
 
 
 class Engine:
@@ -55,10 +77,11 @@ class Engine:
         log.info("scan: %d symbols, %d bars, %d prices, %d candidates",
                  len(symbols), len(bars), len(prices), len(candidates))
 
-        # Phase 2: rank by severity and cap - the human gate is the scarce
-        # resource. Skipped candidates get NO cooldown, so a still-valid
-        # trigger re-competes next cycle.
-        candidates.sort(key=lambda c: c[1].severity, reverse=True)
+        # Phase 2: rank by size-weighted severity and cap - the human gate is
+        # the scarce resource. Skipped candidates get NO cooldown, so a
+        # still-valid trigger re-competes next cycle.
+        candidates.sort(key=lambda c: _rank_score(c[1], bars[c[0]], prices[c[0]]),
+                        reverse=True)
         budget = max(0, self.cfg.scan.max_analyses_per_day - self.store.analyses_today())
         selected = candidates[:min(self.cfg.scan.max_analyses_per_cycle, budget)]
         for sym, trig in candidates[len(selected):]:

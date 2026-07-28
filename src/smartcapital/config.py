@@ -16,9 +16,9 @@ class TriggersCfg(BaseModel):
 
 class ScanCfg(BaseModel):
     # Throttles for large universes: the human gate (you) is the scarce
-    # resource, so triggers are ranked by severity and capped.
+    # resource, so triggers are ranked by size-weighted severity and capped.
     max_analyses_per_cycle: int = 3
-    max_analyses_per_day: int = 6
+    max_analyses_per_day: int = 12
     universe_cache_days: int = 7
 
 

@@ -12,10 +12,11 @@ triggers:
 
 scan:
   # At S&P-500 scale a red day can fire dozens of triggers at once. Triggers
-  # are ranked by severity; only the top N become LLM analyses. The rest are
-  # logged and can re-fire next cycle if still valid.
+  # are ranked by size-weighted severity (a deep drop in a heavily-traded
+  # mega-cap outranks the same drop in an obscure micro-cap); only the top N
+  # become LLM analyses. The rest are logged and can re-fire next cycle.
   max_analyses_per_cycle: 3
-  max_analyses_per_day: 6       # also caps Telegram pings and LLM spend
+  max_analyses_per_day: 12      # also caps Telegram pings and LLM spend
   universe_cache_days: 7        # (reserved) the S&P universe is a bundled snapshot
 
 order:
