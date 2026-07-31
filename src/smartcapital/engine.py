@@ -53,6 +53,10 @@ class Engine:
             return fundamentals.sp500_symbols(
                 cache_days=self.cfg.scan.universe_cache_days,
             )
+        if self.cfg.watchlist == "nasdaq100":
+            return fundamentals.nasdaq100_symbols(
+                cache_days=self.cfg.scan.universe_cache_days,
+            )
         return [self.cfg.watchlist]
 
     def scan(self) -> list[str]:

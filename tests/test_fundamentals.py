@@ -1,7 +1,12 @@
 from datetime import date
 
 from smartcapital import fundamentals
-from smartcapital.fundamentals import _bundled_sp500, _just_reported, split_earnings
+from smartcapital.fundamentals import (
+    _bundled_nasdaq100,
+    _bundled_sp500,
+    _just_reported,
+    split_earnings,
+)
 
 TODAY = date(2026, 7, 20)
 
@@ -50,6 +55,19 @@ def test_bundled_sp500_loads():
 
 def test_sp500_symbols_returns_bundle():
     assert fundamentals.sp500_symbols() == _bundled_sp500()
+
+
+def test_bundled_nasdaq100_loads():
+    symbols = _bundled_nasdaq100()
+    # A real NASDAQ-100 snapshot: ~100 tickers, sorted, deduped, no comments.
+    assert 90 < len(symbols) < 120
+    assert symbols == sorted(symbols)
+    assert {"AAPL", "MSFT", "NVDA", "GOOGL"} <= set(symbols)
+    assert not any(s.startswith("#") for s in symbols)
+
+
+def test_nasdaq100_symbols_returns_bundle():
+    assert fundamentals.nasdaq100_symbols() == _bundled_nasdaq100()
 
 
 def test_news_date_parses_iso_and_none():

@@ -1,8 +1,8 @@
 # SmartCapital v1 configuration. Copy to config.yaml.
 
-# "sp500" scans the full S&P 500; or give an explicit list:
+# "sp500" or "nasdaq100" scan a full index; or give an explicit list:
 # watchlist: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, CRM]
-watchlist: sp500
+watchlist: nasdaq100
 
 triggers:
   poll_interval_minutes: 15

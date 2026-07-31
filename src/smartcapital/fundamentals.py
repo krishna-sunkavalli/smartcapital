@@ -112,18 +112,28 @@ def snapshot(symbol: str) -> dict:
     return snap
 
 
-def _bundled_sp500() -> list[str]:
-    """The bundled point-in-time S&P 500 snapshot (free-tier fallback)."""
+def _bundled_universe(filename: str, label: str) -> list[str]:
+    """Load a bundled point-in-time index snapshot: sorted, deduped, no comments."""
     from importlib.resources import files
 
-    text = (files("smartcapital") / "data" / "sp500.txt").read_text()
+    text = (files("smartcapital") / "data" / filename).read_text()
     symbols = {
         line.strip() for line in text.splitlines()
         if line.strip() and not line.startswith("#")
     }
     if not symbols:
-        raise RuntimeError("bundled S&P 500 snapshot is empty")
+        raise RuntimeError(f"bundled {label} snapshot is empty")
     return sorted(symbols)
+
+
+def _bundled_sp500() -> list[str]:
+    """The bundled point-in-time S&P 500 snapshot (free-tier fallback)."""
+    return _bundled_universe("sp500.txt", "S&P 500")
+
+
+def _bundled_nasdaq100() -> list[str]:
+    """The bundled point-in-time NASDAQ-100 snapshot (free-tier fallback)."""
+    return _bundled_universe("nasdaq100.txt", "NASDAQ-100")
 
 
 def sp500_symbols(cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
@@ -135,6 +145,15 @@ def sp500_symbols(cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
     compatibility but unused - the bundle needs no cache.
     """
     return _bundled_sp500()
+
+
+def nasdaq100_symbols(cache_days: int = 7, cache_dir: str = ".cache") -> list[str]:
+    """NASDAQ-100 constituents from the bundled point-in-time snapshot.
+
+    Same rationale as :func:`sp500_symbols`; ``cache_days``/``cache_dir`` are
+    accepted for call-site compatibility but unused.
+    """
+    return _bundled_nasdaq100()
 
 
 def news(symbol: str, limit: int = 8) -> list[dict]:

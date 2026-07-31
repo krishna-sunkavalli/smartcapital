@@ -99,3 +99,17 @@ def test_rank_score_handles_nan_volume():
     score = _rank_score(Trigger("down_day", {}, severity=0.06), _bars(float("nan")), 100.0)
     assert score > 0  # floored liquidity, ranks on severity
 
+
+def test_universe_resolves_index_keywords(tmp_path, monkeypatch):
+    from smartcapital import fundamentals
+    engine, _ = _engine(tmp_path, monkeypatch)
+
+    engine.cfg.watchlist = "nasdaq100"
+    assert engine.universe() == fundamentals.nasdaq100_symbols()
+
+    engine.cfg.watchlist = "sp500"
+    assert engine.universe() == fundamentals.sp500_symbols()
+
+    engine.cfg.watchlist = ["AAPL", "MSFT"]
+    assert engine.universe() == ["AAPL", "MSFT"]
+

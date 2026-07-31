@@ -49,8 +49,8 @@ class ApprovalCfg(BaseModel):
 
 
 class Config(BaseModel):
-    # "sp500" scans the full S&P 500 (bundled point-in-time snapshot);
-    # or provide an explicit ticker list.
+    # "sp500" or "nasdaq100" scan a full index (bundled point-in-time
+    # snapshot); or provide an explicit ticker list.
     watchlist: str | list[str] = "sp500"
     triggers: TriggersCfg = TriggersCfg()
     scan: ScanCfg = ScanCfg()
