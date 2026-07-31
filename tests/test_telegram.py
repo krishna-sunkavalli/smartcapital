@@ -33,10 +33,10 @@ def test_html_metacharacters_in_llm_output_are_escaped():
     assert "a &lt; b" in msg
     assert "tom &amp; jerry" in msg
     # The template's own bold tags remain real.
-    assert "<b>BUY AAPL?</b>" in msg
+    assert "<b>BUY · AAPL</b>" in msg
 
 
 def test_missing_expiry_does_not_raise():
     p = make_proposal(expires_at=None)
     msg = format_message(p)
-    assert "Expires: n/a" in msg
+    assert "expires —" in msg

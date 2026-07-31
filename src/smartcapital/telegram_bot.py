@@ -17,28 +17,43 @@ log = logging.getLogger(__name__)
 
 
 def format_message(p: Proposal) -> str:
-    """Telegram HTML. All LLM/dynamic content is escaped so reasoning or headlines
-    containing <, >, & (or Markdown metacharacters) can never break parsing and
-    silently drop the proposal."""
+    """Telegram HTML approval card. All LLM/dynamic content is escaped so reasoning
+    or headlines containing <, >, & can never break parsing and silently drop the
+    proposal."""
     v = p.llm_verdict or {}
     ta = (p.packet or {}).get("technicals", {})
     fu = (p.packet or {}).get("fundamentals", {})
     e = html.escape
-    risks = "\n".join(f"  • {e(str(r))}" for r in v.get("key_risks", [])) or "  • (none listed)"
-    pe = fu.get("pe_ttm") and round(fu["pe_ttm"], 1)
-    expires = f"{p.expires_at:%H:%M} UTC" if p.expires_at else "n/a"
+
+    def num(x, suffix="", signed=False):
+        if x is None:
+            return "—"
+        try:
+            xf = float(x)
+        except (TypeError, ValueError):
+            return e(str(x))
+        return f"{'+' if signed and xf > 0 else ''}{xf:g}{suffix}"
+
+    conf = str(v.get("confidence", "—")).upper()
+    badge = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🟠"}.get(conf, "⚪")
+    sector = fu.get("sector") or "—"
+    pe = fu.get("pe_ttm")
+    pe_s = f"P/E {round(pe, 1)}" if isinstance(pe, (int, float)) else "P/E —"
+    expires = f"{p.expires_at:%H:%M} UTC" if p.expires_at else "—"
+    risks = [r for r in (v.get("key_risks") or []) if str(r).strip()][:3]
+    risk_lines = "\n".join(f"• {e(str(r))}" for r in risks) or "• none listed"
+    thesis = e(str(v.get("reasoning", ""))) or "—"
+
     return (
-        f"<b>BUY {e(p.symbol)}?</b>  (trigger: {e(p.trigger_type)})\n"
-        f"{p.qty:g} shares ≈ ${p.notional:,.0f}\n"
-        f"Limit band: ${p.limit_low:,.2f} – ${p.limit_high:,.2f}\n"
-        f"Expires: {expires}\n\n"
-        f"Price ${e(str(ta.get('price')))}, day {e(str(ta.get('day_change_pct')))}%, "
-        f"vs EMA-200 {e(str(ta.get('pct_vs_ema200')))}%, off 52w high "
-        f"{e(str(ta.get('pct_off_52w_high')))}%\n"
-        f"P/E {e(str(pe))}, sector {e(str(fu.get('sector')))}\n\n"
-        f"<b>Why:</b> {e(str(v.get('reasoning', '')))}\n\n"
-        f"<b>Risks:</b>\n{risks}\n\n"
-        f"Confidence: {e(str(v.get('confidence', '?')))}  ·  Model: {e(str(p.llm_model))}"
+        f"{badge} <b>BUY · {e(p.symbol)}</b> · <i>{e(conf)}</i>\n"
+        f"<i>{e(str(sector))}</i>\n\n"
+        f"📉 <b>Signal</b> — {e(p.trigger_type)}, {num(ta.get('day_change_pct'), '%', signed=True)} today\n"
+        f"Px ${num(ta.get('price'))} · EMA200 {num(ta.get('pct_vs_ema200'), '%', signed=True)} · "
+        f"52w {num(ta.get('pct_off_52w_high'), '%', signed=True)} · {pe_s}\n\n"
+        f"🧾 <b>Order</b> — {p.qty:g} sh ≈ ${p.notional:,.0f}\n"
+        f"Limit ${p.limit_low:,.2f}–${p.limit_high:,.2f} · expires {expires}\n\n"
+        f"🧠 <b>Thesis</b>\n<blockquote>{thesis}</blockquote>\n"
+        f"⚠️ <b>Risks</b>\n{risk_lines}"
     )
 
 
